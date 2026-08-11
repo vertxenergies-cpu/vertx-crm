@@ -114,9 +114,10 @@ export const db = {
     return user;
   },
 
-  updateUserPasswordStatus(uid: string, mustChangePassword: boolean): { success: boolean; error?: string } {
+  updateUserPasswordStatus(uidOrEmail: string, mustChangePassword: boolean): { success: boolean; error?: string } {
     const data = ensureDataFile();
-    const user = data.users.find((u) => u.uid === uid || u.id === uid);
+    const lower = uidOrEmail.trim().toLowerCase();
+    const user = data.users.find((u) => u.uid === uidOrEmail || u.id === uidOrEmail || u.email.toLowerCase() === lower);
     if (!user) return { success: false, error: "User not found." };
     user.mustChangePassword = mustChangePassword;
     user.updatedAt = new Date().toISOString();
