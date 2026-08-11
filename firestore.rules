@@ -1,0 +1,222 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && request.auth.token.superAdmin == true;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveUser() {
+      return isSuperAdmin() || (
+        isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        getUserData().approvalStatus == 'APPROVED' &&
+        (getUserData().status == 'ACTIVE' || getUserData().active == true)
+      );
+    }
+
+    function hasRole(role) {
+      return isSuperAdmin() || (isActiveUser() && getUserData().roleId == role);
+    }
+
+    function isAdmin() {
+      return isSuperAdmin() || hasRole('ADMIN');
+    }
+
+    function isManagement() {
+      return isSuperAdmin() || hasRole('ADMIN') || hasRole('MANAGEMENT');
+    }
+
+    function isAssignedToProject(projectData) {
+      return isSuperAdmin() || (isActiveUser() && (
+        projectData.salespersonId == request.auth.uid ||
+        projectData.projectManagerId == request.auth.uid ||
+        projectData.siteSupervisorId == request.auth.uid ||
+        projectData.currentStageOwnerId == request.auth.uid
+      ));
+    }
+
+    // 1. Users Collection
+    match /users/{userId} {
+      // Super Admin and active users can read staff; pending user can ONLY read their own document
+      allow read: if isSuperAdmin() || isActiveUser() || (isAuthenticated() && request.auth.uid == userId);
+      
+      // Creating users:
+      // - Super Admin can create any user
+      // - Self-registration: User can only create their own document as PENDING + INACTIVE with no role or superAdmin privileges
+      allow create: if isSuperAdmin() || (
+        isAuthenticated() &&
+        request.auth.uid == userId &&
+        request.resource.data.approvalStatus == 'PENDING' &&
+        request.resource.data.status == 'INACTIVE' &&
+        request.resource.data.roleId == null &&
+        request.resource.data.superAdmin != true
+      );
+      
+      allow delete: if false; // Soft deactivation only
+
+      // Updating users:
+      // - Super Admin can update any user except self-demotion
+      // - Normal users can update profile details but never approvalStatus, roleId, status, or permissions
+      allow update: if isSuperAdmin() || (
+        isActiveUser() &&
+        request.auth.uid == userId &&
+        request.resource.data.approvalStatus == resource.data.approvalStatus &&
+        request.resource.data.roleId == resource.data.roleId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.active == resource.data.active &&
+        request.resource.data.employeeCode == resource.data.employeeCode &&
+        request.resource.data.superAdmin == resource.data.superAdmin
+      );
+    }
+
+    // 2. Roles & Permissions Master
+    match /roles/{roleId} {
+      allow read: if isActiveUser();
+      allow write: if isSuperAdmin();
+    }
+
+    match /permissions/{permissionId} {
+      allow read: if isActiveUser();
+      allow write: if isSuperAdmin();
+    }
+
+    // 3. Leads Collection
+    match /leads/{leadId} {
+      allow read: if isActiveUser();
+      allow create: if isActiveUser();
+      allow update: if isSuperAdmin() || (
+        isActiveUser() && (
+          isManagement() ||
+          resource.data.assignedSalespersonId == request.auth.uid ||
+          hasRole('SALES_EXECUTIVE')
+        )
+      );
+      allow delete: if isSuperAdmin() || isAdmin();
+    }
+
+    // 4. Customers Collection
+    match /customers/{customerId} {
+      allow read: if isActiveUser();
+      allow create, update: if isActiveUser();
+      allow delete: if isSuperAdmin() || isAdmin();
+    }
+
+    // 5. Projects Collection
+    match /projects/{projectId} {
+      allow read: if isActiveUser();
+      allow create: if isSuperAdmin() || isManagement() || hasRole('SALES_EXECUTIVE') || hasRole('PROJECT_MANAGER');
+      allow update: if isSuperAdmin() || (
+        isActiveUser() && (
+          isManagement() ||
+          isAssignedToProject(resource.data) ||
+          hasRole('PROJECT_MANAGER') ||
+          hasRole('KSEB_TEAM') ||
+          hasRole('INSTALLATION_TEAM') ||
+          hasRole('DOCUMENTATION_TEAM')
+        )
+      );
+      allow delete: if isSuperAdmin() || isAdmin();
+
+      // Project Documents Subcollection
+      match /documents/{docId} {
+        allow read: if isActiveUser();
+        allow create, delete: if isSuperAdmin() || isManagement() || hasRole('PROJECT_MANAGER');
+        allow update: if isSuperAdmin() || (
+          isActiveUser() && (
+            request.resource.data.status in ['PENDING', 'COLLECTED', 'NOT_REQUIRED']
+          )
+        );
+      }
+
+      // Project Activities / Subcollection
+      match /activities/{activityId} {
+        allow read: if isActiveUser();
+        allow write: if false; // Append-only via server / cloud functions
+      }
+
+      // Project Trackers
+      match /loan/{docId} {
+        allow read: if isActiveUser();
+        allow write: if isSuperAdmin() || (isActiveUser() && (isManagement() || hasRole('SALES_EXECUTIVE') || hasRole('PROJECT_MANAGER')));
+      }
+
+      match /kseb/{docId} {
+        allow read: if isActiveUser();
+        allow write: if isSuperAdmin() || (isActiveUser() && (isManagement() || hasRole('KSEB_TEAM') || hasRole('PROJECT_MANAGER')));
+      }
+
+      match /installation/{docId} {
+        allow read: if isActiveUser();
+        allow write: if isSuperAdmin() || (isActiveUser() && (isManagement() || hasRole('INSTALLATION_TEAM') || hasRole('PROJECT_MANAGER')));
+      }
+
+      match /subsidy/{docId} {
+        allow read: if isActiveUser();
+        allow write: if isSuperAdmin() || (isActiveUser() && (isManagement() || hasRole('KSEB_TEAM') || hasRole('PROJECT_MANAGER')));
+      }
+    }
+
+    // 6. Duties Collection
+    match /duties/{dutyId} {
+      allow read: if isActiveUser();
+      allow create: if isSuperAdmin() || isManagement() || hasRole('PROJECT_MANAGER');
+      allow delete: if isSuperAdmin() || isAdmin();
+      allow update: if isSuperAdmin() || (
+        isActiveUser() && (
+          isManagement() ||
+          hasRole('PROJECT_MANAGER') ||
+          (
+            resource.data.assignedTo == request.auth.uid &&
+            request.resource.data.assignedTo == resource.data.assignedTo &&
+            request.resource.data.dutyType == resource.data.dutyType &&
+            request.resource.data.dueDate == resource.data.dueDate
+          )
+        )
+      );
+    }
+
+    // 7. Tasks Collection
+    match /tasks/{taskId} {
+      allow read: if isActiveUser();
+      allow create: if isActiveUser();
+      allow update: if isActiveUser();
+      allow delete: if isSuperAdmin() || isManagement() || hasRole('PROJECT_MANAGER');
+    }
+
+    // 8. Follow-Ups Collection
+    match /followUps/{followUpId} {
+      allow read: if isActiveUser();
+      allow create, update: if isActiveUser();
+      allow delete: if isSuperAdmin() || isManagement() || hasRole('SALES_EXECUTIVE');
+    }
+
+    // 9. Notifications Collection
+    match /notifications/{notificationId} {
+      allow read: if isActiveUser() && resource.data.userId == request.auth.uid;
+      allow update: if isActiveUser() && resource.data.userId == request.auth.uid;
+      allow create, delete: if isSuperAdmin() || isManagement();
+    }
+
+    // 10. Audit Logs Collection (Immutable Server-Controlled Audit Trail)
+    match /auditLogs/{auditId} {
+      allow read: if isSuperAdmin() || isManagement();
+      allow write: if false; // Append-only via secure backend Cloud Functions & Server SDK
+    }
+
+    // 11. Pipeline Settings Collection
+    match /pipelineSettings/{settingsId} {
+      allow read: if isActiveUser();
+      allow write: if isSuperAdmin() || isAdmin();
+    }
+  }
+}
