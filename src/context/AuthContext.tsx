@@ -87,13 +87,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       try {
         const idToken = await user.getIdToken();
-        const res = await fetch("/api/auth/me", {
+        let res = await fetch("/api/auth/me", {
           headers: {
             Authorization: `Bearer ${idToken}`,
           },
         });
 
-        const data = await res.json();
+        let data = await res.json();
+
+        // If profile was just created on registration and not saved in db.json yet, wait 800ms and retry once
+        if (!res.ok && data?.code === "PROFILE_NOT_FOUND") {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          res = await fetch("/api/auth/me", {
+            headers: {
+              Authorization: `Bearer ${idToken}`,
+            },
+          });
+          data = await res.json();
+        }
 
         if (!res.ok || !data.success || !data.data) {
           throw new Error(
