@@ -23,21 +23,24 @@
     {
       "id": "8V8iqpN4UjTT9ymv5VXSx4CqXsX2",
       "uid": "8V8iqpN4UjTT9ymv5VXSx4CqXsX2",
-      "employeeCode": "PENDING",
+      "employeeCode": "EMP-001",
       "name": "Sumegh Sugathan",
       "email": "sumegh.vertx@gmail.com",
       "phone": "+91 9496395506",
-      "role": null,
-      "roleId": null,
+      "role": "SALES_EXECUTIVE",
+      "roleId": "SALES_EXECUTIVE",
       "superAdmin": false,
-      "approvalStatus": "PENDING",
+      "approvalStatus": "APPROVED",
       "department": "Sales & Marketing",
       "designation": "Sales Manager",
-      "active": false,
-      "status": "INACTIVE",
+      "active": true,
+      "status": "ACTIVE",
       "registeredAt": "2026-08-11T08:48:44.594Z",
       "createdAt": "2026-08-11T08:48:44.594Z",
-      "updatedAt": "2026-08-11T08:48:45.410Z"
+      "updatedAt": "2026-08-11T08:51:02.995Z",
+      "approvedAt": "2026-08-11T08:51:02.995Z",
+      "approvedBy": "vertxenergies@gmail.com",
+      "rejectionReason": null
     }
   ],
   "customers": [],
@@ -52,6 +55,26 @@
   "tasks": [],
   "duties": [],
   "auditLogs": [
+    {
+      "id": "audit-1786438262995-6z2we8",
+      "entityType": "USER",
+      "entityId": "8V8iqpN4UjTT9ymv5VXSx4CqXsX2",
+      "userId": "91cNZ6IvPmfsoC3T5wxZbO0lDu63",
+      "userName": "vertxenergies@gmail.com",
+      "userRole": "SUPER_ADMIN",
+      "action": "UPDATE",
+      "actionCategory": "ADMIN_MANAGEMENT",
+      "targetUserId": "8V8iqpN4UjTT9ymv5VXSx4CqXsX2",
+      "targetUserName": "Sumegh Sugathan",
+      "field": "approvalStatus",
+      "oldValue": "PENDING",
+      "newValue": "APPROVED (Role: SALES_EXECUTIVE, Code: EMP-001)",
+      "description": "vertxenergies@gmail.com approved employee registration for Sumegh Sugathan and assigned role SALES_EXECUTIVE (Employee Code: EMP-001).",
+      "ipAddress": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+      "severity": "NORMAL",
+      "createdAt": "2026-08-11T08:51:02.995Z"
+    },
     {
       "id": "audit-1786438124594-u09bhv",
       "entityType": "USER",
@@ -82,6 +105,16 @@
     }
   ],
   "notifications": [
+    {
+      "id": "notif-1786438262995-cdzpb",
+      "userId": "8V8iqpN4UjTT9ymv5VXSx4CqXsX2",
+      "title": "Account Approved",
+      "message": "Your VERTX ENERGIES CRM account has been approved with role SALES_EXECUTIVE. You now have full operational access.",
+      "type": "SUCCESS",
+      "linkUrl": "/dashboard",
+      "read": false,
+      "createdAt": "2026-08-11T08:51:02.995Z"
+    },
     {
       "id": "notif-1786438124594-x660s",
       "userId": "usr-super-admin",

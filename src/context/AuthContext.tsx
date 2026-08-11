@@ -10,6 +10,7 @@ import {
   GoogleAuthProvider,
   signOut as firebaseSignOut,
   sendPasswordResetEmail,
+  updatePassword,
 } from "firebase/auth";
 import { auth } from "@/lib/firebase/client";
 import { User, Role, Permission } from "@/types";
@@ -38,6 +39,7 @@ interface AuthContextType {
   signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  changePassword: (newPassword: string) => Promise<void>;
   allUsers: User[];
 }
 
@@ -57,6 +59,7 @@ const AuthContext = createContext<AuthContextType>({
   signInWithGoogle: async () => {},
   signOut: async () => {},
   resetPassword: async () => {},
+  changePassword: async () => {},
   allUsers: [],
 });
 
@@ -227,6 +230,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await sendPasswordResetEmail(auth, email);
   };
 
+  // Change Password in Firebase Auth Root & Backend
+  const changePassword = async (newPassword: string) => {
+    if (!firebaseUser) {
+      throw new Error("No active Firebase Authentication session found.");
+    }
+
+    if (newPassword.length < 6) {
+      throw new Error("Password must be at least 6 characters long.");
+    }
+
+    // 1. Reflect in Firebase Auth Client SDK (Updates Firebase Root User)
+    try {
+      await updatePassword(firebaseUser, newPassword);
+    } catch (clientErr: any) {
+      console.warn("Notice updating Firebase Client SDK password directly:", clientErr?.message);
+      if (clientErr?.code === "auth/requires-recent-login") {
+        throw new Error("For security reasons, changing your password requires recent sign-in. Please sign out and log in again.");
+      }
+    }
+
+    // 2. Synchronize with Backend & Admin SDK
+    const res = await fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        uid: firebaseUser.uid,
+        newPassword,
+      }),
+    });
+
+    const data = await res.json();
+    if (!data.success) {
+      throw new Error(data.error || "Failed to save password update on server.");
+    }
+
+    if (currentUser) {
+      currentUser.mustChangePassword = false;
+    }
+  };
+
   const loading = status === "INITIALIZING" || status === "AUTHENTICATED_LOADING_PROFILE";
   const role: Role | null = currentUser?.role || (currentUser?.roleId as Role) || null;
   const isSuperAdmin = isSuperAdminClaim || currentUser?.superAdmin === true || role === "SUPER_ADMIN";
@@ -251,6 +294,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         signInWithGoogle,
         signOut,
         resetPassword,
+        changePassword,
         allUsers,
       }}
     >
