@@ -33,7 +33,10 @@ export default function PendingApprovalPage() {
 
     try {
       if (!firebaseUser) {
-        setRefreshing(false);
+        setMessage("Session expired. Redirecting to login...");
+        setTimeout(() => {
+          router.push("/login");
+        }, 1000);
         return;
       }
 
@@ -53,18 +56,34 @@ export default function PendingApprovalPage() {
           setMessage("Your account has been approved! Redirecting to CRM...");
           setTimeout(() => {
             router.push("/dashboard");
-          }, 600);
+          }, 500);
+          return;
+        } else if (found.approvalStatus === "REJECTED") {
+          setMessage("Your registration was not approved. Please contact administrator.");
           return;
         }
+      } else {
+        setMessage("Account profile not found in database. Please register a new employee account.");
+        return;
       }
 
-      setMessage("Status refreshed: Waiting for Super Administrator approval.");
-      setTimeout(() => setMessage(null), 3000);
-    } catch (err) {
+      setMessage("Status refreshed: Awaiting Super Administrator authorization.");
+      setTimeout(() => setMessage(null), 4000);
+    } catch (err: any) {
       console.error("Failed to refresh status:", err);
+      setMessage("Could not connect to server. Please try again.");
     } finally {
       setRefreshing(false);
     }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+    } catch (err) {
+      console.error("Sign out error:", err);
+    }
+    router.push("/login");
   };
 
   useEffect(() => {
@@ -193,9 +212,10 @@ export default function PendingApprovalPage() {
           <div className="space-y-3 pt-2">
             {!isRejected ? (
               <button
+                type="button"
                 onClick={checkStatus}
                 disabled={refreshing}
-                className="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/30 transition flex items-center justify-center gap-2 disabled:opacity-50"
+                className="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-blue-600/30 transition flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
               >
                 <RotateCw className={clsx("w-4 h-4", refreshing && "animate-spin")} />
                 {refreshing ? "Checking Status..." : "Refresh Approval Status"}
@@ -210,8 +230,9 @@ export default function PendingApprovalPage() {
             )}
 
             <button
-              onClick={() => signOut()}
-              className="w-full py-2.5 px-4 bg-slate-950/60 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-800 transition flex items-center justify-center gap-2"
+              type="button"
+              onClick={handleSignOut}
+              className="w-full py-2.5 px-4 bg-slate-950/60 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-semibold border border-slate-800 transition flex items-center justify-center gap-2 cursor-pointer"
             >
               <LogOut className="w-4 h-4 text-slate-400" /> Sign Out & Return to Login
             </button>

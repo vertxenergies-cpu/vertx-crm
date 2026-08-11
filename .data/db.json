@@ -1,8 +1,8 @@
 {
   "users": [
     {
-      "id": "usr-super-admin",
-      "uid": "usr-super-admin",
+      "id": "91cNZ6IvPmfsoC3T5wxZbO0lDu63",
+      "uid": "91cNZ6IvPmfsoC3T5wxZbO0lDu63",
       "employeeCode": "EMP-000",
       "name": "Vertx Energies Super Admin",
       "email": "vertxenergies@gmail.com",
@@ -15,10 +15,29 @@
       "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80",
       "active": true,
       "status": "ACTIVE",
-      "mustChangePassword": true,
+      "mustChangePassword": false,
       "approvalStatus": "APPROVED",
       "createdAt": "2026-01-15T09:00:00.000Z",
-      "updatedAt": "2026-08-11T14:14:00.000Z"
+      "updatedAt": "2026-08-11T08:47:28.637Z"
+    },
+    {
+      "id": "8V8iqpN4UjTT9ymv5VXSx4CqXsX2",
+      "uid": "8V8iqpN4UjTT9ymv5VXSx4CqXsX2",
+      "employeeCode": "PENDING",
+      "name": "Sumegh Sugathan",
+      "email": "sumegh.vertx@gmail.com",
+      "phone": "+91 9496395506",
+      "role": null,
+      "roleId": null,
+      "superAdmin": false,
+      "approvalStatus": "PENDING",
+      "department": "Sales & Marketing",
+      "designation": "Sales Manager",
+      "active": false,
+      "status": "INACTIVE",
+      "registeredAt": "2026-08-11T08:48:44.594Z",
+      "createdAt": "2026-08-11T08:48:44.594Z",
+      "updatedAt": "2026-08-11T08:48:45.410Z"
     }
   ],
   "customers": [],
@@ -32,7 +51,47 @@
   "followUps": [],
   "tasks": [],
   "duties": [],
-  "auditLogs": [],
-  "notifications": [],
+  "auditLogs": [
+    {
+      "id": "audit-1786438124594-u09bhv",
+      "entityType": "USER",
+      "entityId": "usr-msof4uuq-hvoq",
+      "userId": "usr-msof4uuq-hvoq",
+      "userName": "Sumegh Sugathan",
+      "userRole": "PENDING_REGISTRATION",
+      "action": "CREATE",
+      "actionCategory": "USER_MANAGEMENT",
+      "targetUserId": "usr-msof4uuq-hvoq",
+      "targetUserName": "Sumegh Sugathan",
+      "description": "Sumegh Sugathan (sumegh.vertx@gmail.com) submitted registration for Sales & Marketing (Sales Manager). Awaiting Super Admin approval.",
+      "severity": "NORMAL",
+      "createdAt": "2026-08-11T08:48:44.594Z"
+    },
+    {
+      "entityType": "USER",
+      "entityId": "91cNZ6IvPmfsoC3T5wxZbO0lDu63",
+      "userId": "91cNZ6IvPmfsoC3T5wxZbO0lDu63",
+      "userName": "Vertx Energies Super Admin",
+      "userRole": "SUPER_ADMIN",
+      "action": "PASSWORD_CHANGED",
+      "actionCategory": "SECURITY",
+      "description": "User Vertx Energies Super Admin (vertxenergies@gmail.com) updated account password. Temporary password requirement resolved.",
+      "newValue": "mustChangePassword=false",
+      "id": "audit-1786438048638-57",
+      "createdAt": "2026-08-11T08:47:28.638Z"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "notif-1786438124594-x660s",
+      "userId": "usr-super-admin",
+      "title": "New Employee Registration",
+      "message": "Sumegh Sugathan has registered for a VERTX ENERGIES employee account (Sales & Marketing - Sales Manager).",
+      "type": "INFO",
+      "linkUrl": "/super-admin/approvals",
+      "read": false,
+      "createdAt": "2026-08-11T08:48:44.594Z"
+    }
+  ],
   "notes": []
 }
