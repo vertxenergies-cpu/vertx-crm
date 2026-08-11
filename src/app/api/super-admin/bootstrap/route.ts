@@ -24,6 +24,9 @@ export async function POST(req: NextRequest) {
       let fbUser;
       try {
         fbUser = await adminAuth.getUserByEmail(superAdminEmail);
+        if (fbUser && password) {
+          await adminAuth.updateUser(fbUser.uid, { password });
+        }
       } catch (notFound) {
         if (password) {
           fbUser = await adminAuth.createUser({
@@ -44,8 +47,19 @@ export async function POST(req: NextRequest) {
     }
 
     // Ensure database profile has superAdmin: true and status: ACTIVE
-    const existing = storage.getUserById(uid);
-    if (!existing) {
+    const existing =
+      storage.getUserById(uid) ||
+      storage.getUsers().find((u) => u.email.toLowerCase() === superAdminEmail.toLowerCase());
+
+    if (existing) {
+      existing.superAdmin = true;
+      existing.role = "SUPER_ADMIN";
+      existing.roleId = "SUPER_ADMIN";
+      existing.approvalStatus = "APPROVED";
+      existing.status = "ACTIVE";
+      existing.mustChangePassword = false;
+      storage.createUser(existing);
+    } else {
       storage.createUser({
         id: uid,
         uid,
@@ -60,6 +74,7 @@ export async function POST(req: NextRequest) {
         designation: "Chief Information Security Officer",
         active: true,
         status: "ACTIVE",
+        mustChangePassword: false,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       } as any);
@@ -72,6 +87,7 @@ export async function POST(req: NextRequest) {
       email: superAdminEmail,
     });
   } catch (err: any) {
+    console.error("Bootstrap error details:", err);
     return NextResponse.json(
       { success: false, error: err?.message || "Failed to bootstrap Super Admin." },
       { status: 500 }

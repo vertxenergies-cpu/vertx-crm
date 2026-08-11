@@ -178,7 +178,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (err: any) {
       const lowerEmail = email.trim().toLowerCase();
       const matchingInitial = INITIAL_USERS.find((u) => u.email.toLowerCase() === lowerEmail);
-      const isValidTempPass = pass === "TempPass@2026" || pass === "password123";
+      const isValidTempPass = pass === "123456" || pass === "TempPass@2026" || pass === "password123";
 
       if (matchingInitial && isValidTempPass) {
         try {

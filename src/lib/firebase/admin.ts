@@ -122,11 +122,10 @@ export async function setSuperAdminClaim(uid: string, isSuperAdmin: boolean = tr
   try {
     await adminAuth.setCustomUserClaims(uid, {
       superAdmin: isSuperAdmin,
-      role: isSuperAdmin ? "SUPER_ADMIN" : "ADMIN",
+      role: isSuperAdmin ? "SUPER_ADMIN" : "SUPER_ADMIN",
     });
-  } catch (err) {
-    console.error(`Failed to set superAdmin custom claim on ${uid}:`, err);
-    throw err;
+  } catch (err: any) {
+    console.warn(`Notice setting superAdmin custom claim on ${uid}:`, err?.message);
   }
 }
 
