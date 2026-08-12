@@ -700,11 +700,11 @@ function LeadsContent() {
         icon={<UserPlus className="w-5 h-5 text-blue-600" />}
         maxWidth="xl"
         footer={
-          <>
+          <div className="flex items-center justify-end gap-2 w-full sm:w-auto">
             <button
               type="button"
               onClick={handleCloseCreateModal}
-              className="px-4 py-2 text-slate-600 hover:bg-slate-200/60 rounded-xl text-xs font-semibold transition cursor-pointer"
+              className="w-1/2 sm:w-auto px-4 py-2.5 sm:py-2 text-slate-600 hover:bg-slate-200/60 border border-slate-200 sm:border-transparent rounded-xl text-xs sm:text-sm font-semibold transition cursor-pointer min-h-[44px] flex items-center justify-center"
             >
               Cancel
             </button>
@@ -712,67 +712,67 @@ function LeadsContent() {
               type="submit"
               form="create-lead-form"
               disabled={isSubmitting}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50"
+              className="w-1/2 sm:w-auto px-5 py-2.5 sm:py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50 min-h-[44px] flex items-center justify-center"
             >
               {isSubmitting ? "Creating..." : "Save & Create Lead"}
             </button>
-          </>
+          </div>
         }
       >
-        <form id="create-lead-form" onSubmit={handleCreateLead} className="space-y-4 text-xs">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <form id="create-lead-form" onSubmit={handleCreateLead} className="space-y-3.5 sm:space-y-4 text-xs sm:text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Customer Full Name *</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Customer Full Name *</label>
               <input
                 type="text"
                 required
                 value={formData.customerName}
                 onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
                 placeholder="e.g. Sineesh"
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Phone Number *</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Phone Number *</label>
               <input
                 type="text"
                 required
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 placeholder="+91 96338 05718"
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">WhatsApp Number</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">WhatsApp Number</label>
               <input
                 type="text"
                 value={formData.whatsapp}
                 onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
                 placeholder="+91 96338 05718"
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Email Address</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Email Address</label>
               <input
                 type="email"
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 placeholder="customer@gmail.com"
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Kerala District *</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Kerala District *</label>
               <select
                 value={formData.district}
                 onChange={(e) => setFormData({ ...formData, district: e.target.value })}
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               >
                 {KERALA_DISTRICTS.map((d) => (
                   <option key={d} value={d}>
@@ -783,11 +783,11 @@ function LeadsContent() {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Lead Source *</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Lead Source *</label>
               <select
                 value={formData.leadSource}
                 onChange={(e) => setFormData({ ...formData, leadSource: e.target.value })}
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               >
                 {LEAD_SOURCES.map((s) => (
                   <option key={s} value={s}>
@@ -798,33 +798,33 @@ function LeadsContent() {
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Estimated System Size (kW) *</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Estimated System Size (kW) *</label>
               <input
                 type="number"
                 step="0.5"
                 value={formData.estimatedSystemSizeKw}
                 onChange={(e) => setFormData({ ...formData, estimatedSystemSizeKw: e.target.value })}
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Monthly Electricity Bill (₹)</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Monthly Electricity Bill (₹)</label>
               <input
                 type="number"
                 value={formData.monthlyElectricityBill}
                 onChange={(e) => setFormData({ ...formData, monthlyElectricityBill: e.target.value })}
                 placeholder="e.g. 4500"
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               />
             </div>
 
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Priority Level *</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Priority Level *</label>
               <select
                 value={formData.priority}
                 onChange={(e) => setFormData({ ...formData, priority: e.target.value as LeadPriority })}
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[44px]"
               >
                 <option value="HOT">🔥 Hot (Immediate Intent)</option>
                 <option value="HIGH">High Priority</option>
@@ -835,11 +835,11 @@ function LeadsContent() {
 
             {/* Work Assignment Dropdown */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Assign To (Work Assignment)</label>
+              <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Assign To (Work Assignment)</label>
               <select
                 value={formData.assignedToUid}
                 onChange={(e) => setFormData({ ...formData, assignedToUid: e.target.value })}
-                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium"
+                className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium min-h-[44px]"
               >
                 <option value="">Unassigned (Lead Pool Queue)</option>
                 {activeApprovedEmployees.map((u) => (
@@ -862,24 +862,24 @@ function LeadsContent() {
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Address / Landmark</label>
+            <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Address / Landmark</label>
             <textarea
               rows={2}
               value={formData.address}
               onChange={(e) => setFormData({ ...formData, address: e.target.value })}
               placeholder="Near Post Office, Mavoor Road..."
-              className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+              className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[80px]"
             />
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Customer Requirement Notes</label>
+            <label className="block font-semibold text-slate-700 mb-1 text-xs sm:text-sm">Customer Requirement Notes</label>
             <textarea
               rows={2}
               value={formData.requirementNotes}
               onChange={(e) => setFormData({ ...formData, requirementNotes: e.target.value })}
               placeholder="Interested in PM Surya Ghar 78k subsidy scheme..."
-              className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+              className="w-full text-xs sm:text-sm px-3 py-2.5 sm:py-2 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden min-h-[90px]"
             />
           </div>
         </form>

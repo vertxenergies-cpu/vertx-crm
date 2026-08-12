@@ -123,7 +123,7 @@ export function Modal({
   return createPortal(
     <div
       role="presentation"
-      className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/60 backdrop-blur-xs flex min-h-screen items-center justify-center p-4 sm:p-6"
+      className="fixed inset-0 z-[100] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overscroll-none h-[100dvh]"
       onMouseDown={handleBackdropMouseDown}
       onMouseUp={handleBackdropMouseUp}
     >
@@ -134,7 +134,7 @@ export function Modal({
         aria-label={typeof title === "string" ? title : "Modal Dialog"}
         className={clsx(
           "w-full bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col overflow-hidden my-auto",
-          "max-h-[calc(100vh-32px)] sm:max-h-[min(88vh,720px)]",
+          "max-h-[calc(100dvh-24px)] sm:max-h-[min(88vh,720px)]",
           maxWidthMap[maxWidth] || "max-w-2xl",
           "animate-fadeIn z-[110]"
         )}
@@ -153,13 +153,13 @@ export function Modal({
         {/* Header - Fixed / Pinned */}
         <div
           className={clsx(
-            "p-4 sm:px-6 sm:py-4 border-b flex items-center justify-between shrink-0",
+            "p-3.5 sm:px-6 sm:py-4 border-b flex items-center justify-between shrink-0 sticky top-0 z-10",
             headerBg
           )}
         >
-          <div className="flex items-center gap-2 font-bold text-base text-slate-900">
+          <div className="flex items-center gap-2 font-bold text-sm sm:text-base text-slate-900">
             {icon}
-            <h3>{title}</h3>
+            <h3 className="truncate">{title}</h3>
           </div>
           <button
             type="button"
@@ -170,15 +170,15 @@ export function Modal({
             <X className="w-5 h-5" />
           </button>
         </div>
- 
+
         {/* Body - Scrollable */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+        <div className="flex-1 overflow-y-auto p-3.5 sm:p-6 overscroll-contain">
           {children}
         </div>
- 
+
         {/* Footer - Fixed / Pinned if provided */}
         {footer && (
-          <div className="p-4 sm:px-6 sm:py-3.5 border-t bg-slate-50 shrink-0 flex items-center justify-end gap-2">
+          <div className="p-3.5 sm:px-6 sm:py-3.5 border-t bg-slate-50 shrink-0 flex items-center justify-end gap-2 sticky bottom-0 z-10 pb-[calc(14px+env(safe-area-inset-bottom))] sm:pb-3.5">
             {footer}
           </div>
         )}
