@@ -20,8 +20,9 @@ import {
   AlertTriangle,
   KeyRound,
   MoreVertical,
+  Pencil,
 } from "lucide-react";
-import { EmployeeWorkloadSummary, Role, EmployeeStatus } from "@/types";
+import { EmployeeWorkloadSummary, Role, EmployeeStatus, User, ApprovalStatus } from "@/types";
 import { useAuth } from "@/context/AuthContext";
 import { STANDARD_EMPLOYEE_ROLES, ROLES_CONFIG } from "@/lib/constants";
 import { Modal } from "@/components/ui/Modal";
@@ -50,6 +51,67 @@ export default function EmployeeControlCenterPage() {
   const [targetStatus, setTargetStatus] = useState<EmployeeStatus>("ACTIVE");
   const [actionProcessing, setActionProcessing] = useState(false);
   const [feedbackMessage, setFeedbackMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Super Admin Full Profile Edit Modal State
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editEmployee, setEditEmployee] = useState<User | null>(null);
+  const [editFormData, setEditFormData] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    department: "",
+    designation: "",
+    employeeCode: "",
+    role: "SALES_EXECUTIVE" as Role,
+    approvalStatus: "APPROVED" as ApprovalStatus,
+    active: true,
+  });
+
+  const openEditModal = (user: User) => {
+    setEditEmployee(user);
+    setEditFormData({
+      name: user.name || "",
+      email: user.email || "",
+      phone: user.phone || "",
+      department: user.department || "",
+      designation: user.designation || "",
+      employeeCode: user.employeeCode || "",
+      role: (user.role || "SALES_EXECUTIVE") as Role,
+      approvalStatus: (user.approvalStatus || "APPROVED") as ApprovalStatus,
+      active: user.active ?? true,
+    });
+    setEditModalOpen(true);
+  };
+
+  const handleSaveEditEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editEmployee) return;
+    setActionProcessing(true);
+    try {
+      const token = await getIdToken();
+      const res = await fetch(`/api/super-admin/employees/${editEmployee.uid}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token ? `Bearer ${token.replace("Bearer ", "")}` : "",
+        },
+        body: JSON.stringify(editFormData),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        setFeedbackMessage({ type: "success", text: `Successfully updated employee profile for ${data.data.name}.` });
+        setEditModalOpen(false);
+        loadEmployees();
+      } else {
+        setFeedbackMessage({ type: "error", text: data.error || "Failed to update employee profile." });
+      }
+    } catch (err: any) {
+      setFeedbackMessage({ type: "error", text: err?.message || "Error updating employee profile." });
+    } finally {
+      setActionProcessing(false);
+    }
+  };
 
   const loadEmployees = async () => {
     setLoading(true);
@@ -496,6 +558,15 @@ export default function EmployeeControlCenterPage() {
                       {/* Actions */}
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => openEditModal(emp.user)}
+                            className="px-2.5 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 rounded-lg text-[11px] font-bold border border-blue-200 transition cursor-pointer flex items-center gap-1"
+                            title="Edit Employee Profile"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            <span>Edit</span>
+                          </button>
+
                           <Link
                             href={`/super-admin/employees/${emp.user.uid}`}
                             className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition"
@@ -644,6 +715,140 @@ export default function EmployeeControlCenterPage() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* Edit Employee Profile Modal */}
+      <Modal
+        isOpen={editModalOpen}
+        onClose={() => setEditModalOpen(false)}
+        title={`Edit Employee Profile — ${editEmployee?.name}`}
+      >
+        <form onSubmit={handleSaveEditEmployee} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Full Legal Name *</label>
+              <input
+                type="text"
+                required
+                value={editFormData.name}
+                onChange={(e) => setEditFormData({ ...editFormData, name: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Official Email *</label>
+              <input
+                type="email"
+                required
+                value={editFormData.email}
+                onChange={(e) => setEditFormData({ ...editFormData, email: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Phone Number</label>
+              <input
+                type="text"
+                value={editFormData.phone}
+                onChange={(e) => setEditFormData({ ...editFormData, phone: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Employee Code</label>
+              <input
+                type="text"
+                value={editFormData.employeeCode}
+                onChange={(e) => setEditFormData({ ...editFormData, employeeCode: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Department</label>
+              <input
+                type="text"
+                value={editFormData.department}
+                onChange={(e) => setEditFormData({ ...editFormData, department: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Designation</label>
+              <input
+                type="text"
+                value={editFormData.designation}
+                onChange={(e) => setEditFormData({ ...editFormData, designation: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Role *</label>
+              <select
+                value={editFormData.role}
+                onChange={(e) => setEditFormData({ ...editFormData, role: e.target.value as Role })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800"
+              >
+                {STANDARD_EMPLOYEE_ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {ROLES_CONFIG[r]?.name || r} ({r})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Approval Status</label>
+              <select
+                value={editFormData.approvalStatus}
+                onChange={(e) => setEditFormData({ ...editFormData, approvalStatus: e.target.value as ApprovalStatus })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800"
+              >
+                <option value="APPROVED">APPROVED (Active Staff)</option>
+                <option value="PENDING">PENDING (Approval Required)</option>
+                <option value="REJECTED">REJECTED (Access Denied)</option>
+              </select>
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-bold text-slate-700 mb-1">Account Active Status</label>
+              <select
+                value={editFormData.active ? "ACTIVE" : "INACTIVE"}
+                onChange={(e) => setEditFormData({ ...editFormData, active: e.target.value === "ACTIVE" })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-800"
+              >
+                <option value="ACTIVE">ACTIVE (Authorized to access CRM)</option>
+                <option value="INACTIVE">INACTIVE (Deactivated staff account)</option>
+              </select>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-slate-500 italic font-medium pt-1">
+            * Changes will be recorded in the audit log.
+          </p>
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setEditModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={actionProcessing}
+              className="px-5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shadow-md shadow-amber-600/30 transition cursor-pointer"
+            >
+              {actionProcessing ? "Saving Changes..." : "Save Changes"}
+            </button>
+          </div>
+        </form>
       </Modal>
 
       {/* Bulk Operation Confirmation Modal */}

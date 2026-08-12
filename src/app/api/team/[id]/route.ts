@@ -1,53 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth/authorization";
-import { saveUserToFirestore, adminAuth } from "@/lib/firebase/admin";
 import { storage } from "@/lib/storage";
+import { saveUserToFirestore, adminAuth } from "@/lib/firebase/admin";
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { uid: string } }
-) {
-  const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
-  if (!authHeader) {
-    return NextResponse.json(
-      { success: false, error: "Unauthorized: Missing identity token." },
-      { status: 401 }
-    );
-  }
-
-  const authenticatedUser = await getAuthenticatedUser(req);
-  if (!authenticatedUser) {
-    return NextResponse.json(
-      { success: false, error: "Unauthorized: Invalid token." },
-      { status: 401 }
-    );
-  }
-
-  if (authenticatedUser.superAdmin !== true && authenticatedUser.role !== "SUPER_ADMIN") {
-    return NextResponse.json(
-      { success: false, error: "Forbidden: Super Administrator authorization required." },
-      { status: 403 }
-    );
-  }
-
-  const { uid } = params;
-  try {
-    const detail = storage.getEmployeeWorkloadDetail(uid);
-    if (!detail) {
-      return NextResponse.json({ success: false, error: "Employee not found." }, { status: 404 });
-    }
-    return NextResponse.json({ success: true, data: detail });
-  } catch (err: any) {
-    return NextResponse.json(
-      { success: false, error: err?.message || "Failed to fetch employee details." },
-      { status: 500 }
-    );
-  }
-}
+export const dynamic = "force-dynamic";
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { uid: string } }
+  { params }: { params: { id: string } }
 ) {
   const authHeader = req.headers.get("authorization") || req.headers.get("Authorization");
   if (!authHeader) {
@@ -72,7 +32,7 @@ export async function PATCH(
     );
   }
 
-  const { uid } = params;
+  const uid = params.id;
   const userAgent = req.headers.get("user-agent") || undefined;
   const ip = req.headers.get("x-forwarded-for") || req.ip || undefined;
   const actor = {
@@ -90,11 +50,9 @@ export async function PATCH(
       return NextResponse.json({ success: false, error: res.error || "Failed to update employee profile." }, { status: 400 });
     }
 
-    // Persist updated profile to Firestore
     await saveUserToFirestore(res.user);
 
-    // Sync email with Firebase Auth if changed and adminAuth is initialized
-    if (body.email && body.email.trim().toLowerCase() !== authenticatedUser.email?.trim().toLowerCase()) {
+    if (body.email && body.email.trim().toLowerCase() !== res.user.email?.trim().toLowerCase()) {
       try {
         if (adminAuth) {
           await adminAuth.updateUser(uid, { email: body.email.trim() });

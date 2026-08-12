@@ -2905,18 +2905,101 @@ export const db = {
     }
 
     const targetUser = data.users[userIndex];
+    const changedFields: string[] = [];
+    const oldValues: Record<string, any> = {};
+    const newValues: Record<string, any> = {};
 
-    // Restrict protected fields from direct profile patch
-    if (updates.role && updates.role !== targetUser.role) {
-      return this.changeEmployeeRole(uid, updates.role, actor);
+    // Check email uniqueness if modified
+    if (updates.email && updates.email.trim().toLowerCase() !== targetUser.email?.trim().toLowerCase()) {
+      const cleanEmail = updates.email.trim().toLowerCase();
+      const existing = data.users.find(
+        (u) => (u.uid !== uid && u.id !== uid) && u.email?.trim().toLowerCase() === cleanEmail
+      );
+      if (existing) {
+        return { success: false, error: "Email address is already assigned to another employee." };
+      }
+      changedFields.push("email");
+      oldValues.email = targetUser.email;
+      newValues.email = updates.email.trim();
+      targetUser.email = updates.email.trim();
     }
 
-    if (updates.name) targetUser.name = updates.name;
-    if (updates.phone) targetUser.phone = updates.phone;
-    if (updates.department) targetUser.department = updates.department;
-    if (updates.designation) targetUser.designation = updates.designation;
-    if (updates.employeeCode) targetUser.employeeCode = updates.employeeCode;
+    if (updates.name && updates.name.trim() !== targetUser.name) {
+      changedFields.push("name");
+      oldValues.name = targetUser.name;
+      newValues.name = updates.name.trim();
+      targetUser.name = updates.name.trim();
+    }
+
+    if (updates.phone !== undefined && updates.phone !== targetUser.phone) {
+      changedFields.push("phone");
+      oldValues.phone = targetUser.phone;
+      newValues.phone = updates.phone;
+      targetUser.phone = updates.phone;
+    }
+
+    if (updates.department !== undefined && updates.department !== targetUser.department) {
+      changedFields.push("department");
+      oldValues.department = targetUser.department;
+      newValues.department = updates.department;
+      targetUser.department = updates.department;
+    }
+
+    if (updates.designation !== undefined && updates.designation !== targetUser.designation) {
+      changedFields.push("designation");
+      oldValues.designation = targetUser.designation;
+      newValues.designation = updates.designation;
+      targetUser.designation = updates.designation;
+    }
+
+    if (updates.employeeCode && updates.employeeCode !== targetUser.employeeCode) {
+      changedFields.push("employeeCode");
+      oldValues.employeeCode = targetUser.employeeCode;
+      newValues.employeeCode = updates.employeeCode;
+      targetUser.employeeCode = updates.employeeCode;
+    }
+
+    if (updates.role && updates.role !== targetUser.role) {
+      changedFields.push("role");
+      oldValues.role = targetUser.role;
+      newValues.role = updates.role;
+      targetUser.role = updates.role;
+      targetUser.roleId = updates.role;
+      if (updates.role === "SUPER_ADMIN") {
+        targetUser.superAdmin = true;
+      }
+    }
+
+    if (updates.approvalStatus && updates.approvalStatus !== targetUser.approvalStatus) {
+      changedFields.push("approvalStatus");
+      oldValues.approvalStatus = targetUser.approvalStatus;
+      newValues.approvalStatus = updates.approvalStatus;
+      targetUser.approvalStatus = updates.approvalStatus;
+    }
+
+    if (updates.active !== undefined && updates.active !== targetUser.active) {
+      changedFields.push("active");
+      oldValues.active = targetUser.active;
+      newValues.active = updates.active;
+      targetUser.active = updates.active;
+      targetUser.status = updates.active ? "ACTIVE" : "INACTIVE";
+    }
+
+    if (updates.status && updates.status !== targetUser.status) {
+      if (!changedFields.includes("active")) {
+        changedFields.push("status");
+        oldValues.status = targetUser.status;
+        newValues.status = updates.status;
+      }
+      targetUser.status = updates.status;
+      targetUser.active = updates.status === "ACTIVE";
+    }
+
     targetUser.updatedAt = new Date().toISOString();
+
+    const auditDescription = changedFields.length > 0
+      ? `${actor.name} updated employee profile for ${targetUser.name}: modified ${changedFields.join(", ")}.`
+      : `${actor.name} updated profile for ${targetUser.name}.`;
 
     const audit: AuditLog = {
       id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
@@ -2925,11 +3008,14 @@ export const db = {
       userId: actor.uid,
       userName: actor.name,
       userRole: actor.role,
-      action: "UPDATE",
+      action: "EMPLOYEE_PROFILE_UPDATED",
       actionCategory: "ADMIN_MANAGEMENT",
       targetUserId: targetUser.uid,
       targetUserName: targetUser.name,
-      description: `${actor.name} updated profile details for ${targetUser.name}.`,
+      field: changedFields.join(", "),
+      oldValue: JSON.stringify(oldValues),
+      newValue: JSON.stringify(newValues),
+      description: auditDescription,
       ipAddress: actor.ip || null,
       userAgent: actor.userAgent || null,
       severity: "NORMAL",
