@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storage } from "@/lib/storage";
-import { verifySuperAdminToken } from "@/lib/firebase/admin";
+import { verifySuperAdminToken, saveUserToFirestore, getUserFromFirestore } from "@/lib/firebase/admin";
 
 export async function POST(req: NextRequest, { params }: { params: { uid: string } }) {
   try {
@@ -18,6 +18,16 @@ export async function POST(req: NextRequest, { params }: { params: { uid: string
     const body = await req.json();
     const { rejectionReason } = body;
 
+    // Ensure user exists in local storage if only present in Firestore
+    let localUser = storage.getUserById(uid);
+    if (!localUser) {
+      const fUser = await getUserFromFirestore(uid);
+      if (fUser) {
+        storage.createUser(fUser);
+        localUser = fUser;
+      }
+    }
+
     const ip = req.headers.get("x-forwarded-for") || undefined;
     const userAgent = req.headers.get("user-agent") || undefined;
 
@@ -29,9 +39,14 @@ export async function POST(req: NextRequest, { params }: { params: { uid: string
       userAgent,
     });
 
-    if (!result.success) {
+    if (!result.success || !result.user) {
       return NextResponse.json({ success: false, error: result.error }, { status: 400 });
     }
+
+    // Persist rejected user state to Firestore
+    await saveUserToFirestore(result.user);
+
+    console.info(`[REJECT] Successfully rejected employee ${result.user.email}`);
 
     return NextResponse.json({
       success: true,

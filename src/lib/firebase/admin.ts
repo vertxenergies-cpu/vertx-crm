@@ -1,7 +1,7 @@
 import { initializeApp, getApps, cert, App } from "firebase-admin/app";
 import { getAuth, Auth, DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore, Firestore } from "firebase-admin/firestore";
-import { Role, Permission, AuditLog, CustomPermissionOverrides } from "@/types";
+import { Role, Permission, AuditLog, CustomPermissionOverrides, User } from "@/types";
 import { ROLES_CONFIG } from "@/lib/constants";
 
 let app: App;
@@ -175,4 +175,69 @@ export function calculateEffectivePermissions(
   denials.forEach((d) => combined.delete(d));
 
   return Array.from(combined);
+}
+
+/**
+ * Persists a user document directly to Firestore.
+ */
+export async function saveUserToFirestore(user: User): Promise<void> {
+  try {
+    const docId = user.uid || user.id;
+    if (!docId) return;
+    const cleanUser = {
+      ...user,
+      id: docId,
+      uid: docId,
+      updatedAt: new Date().toISOString(),
+    };
+    await adminDb.collection("users").doc(docId).set(cleanUser, { merge: true });
+  } catch (err: any) {
+    console.warn("[Firestore] Notice saving user to Firestore (fallback to local storage):", err?.message);
+  }
+}
+
+/**
+ * Fetches a user document by UID from Firestore.
+ */
+export async function getUserFromFirestore(uid: string): Promise<User | null> {
+  try {
+    const doc = await adminDb.collection("users").doc(uid).get();
+    if (doc.exists) {
+      return doc.data() as User;
+    }
+  } catch (err: any) {
+    console.warn("[Firestore] Notice fetching user by UID from Firestore:", err?.message);
+  }
+  return null;
+}
+
+/**
+ * Fetches a user document by Email from Firestore.
+ */
+export async function getUserByEmailFromFirestore(email: string): Promise<User | null> {
+  try {
+    const clean = email.trim().toLowerCase();
+    const snapshot = await adminDb.collection("users").where("email", "==", clean).limit(1).get();
+    if (!snapshot.empty) {
+      return snapshot.docs[0].data() as User;
+    }
+  } catch (err: any) {
+    console.warn("[Firestore] Notice fetching user by email from Firestore:", err?.message);
+  }
+  return null;
+}
+
+/**
+ * Fetches all user documents from Firestore.
+ */
+export async function getAllUsersFromFirestore(): Promise<User[]> {
+  try {
+    const snapshot = await adminDb.collection("users").get();
+    if (!snapshot.empty) {
+      return snapshot.docs.map((d) => d.data() as User);
+    }
+  } catch (err: any) {
+    console.warn("[Firestore] Notice fetching all users from Firestore:", err?.message);
+  }
+  return [];
 }

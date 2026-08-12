@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storage } from "@/lib/storage";
-import { adminAuth } from "@/lib/firebase/admin";
+import { adminAuth, saveUserToFirestore } from "@/lib/firebase/admin";
 
 export async function POST(req: NextRequest) {
   try {
@@ -69,9 +69,14 @@ export async function POST(req: NextRequest) {
       employeeCode: employeeCode?.trim(),
     });
 
-    if (!regResult.success) {
+    if (!regResult.success || !regResult.user) {
       return NextResponse.json({ success: false, error: regResult.error }, { status: 400 });
     }
+
+    // Persist immediately to Firestore for cross-serverless Netlify persistence
+    await saveUserToFirestore(regResult.user);
+
+    console.info(`[REGISTER] Created employee profile: ${regResult.user.email} (UID: ${regResult.user.uid}, Approval: PENDING)`);
 
     return NextResponse.json({
       success: true,

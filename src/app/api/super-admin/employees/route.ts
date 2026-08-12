@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySuperAdminToken, setUserRoleClaim, adminAuth } from "@/lib/firebase/admin";
+import {
+  verifySuperAdminToken,
+  setUserRoleClaim,
+  adminAuth,
+  getAllUsersFromFirestore,
+  saveUserToFirestore,
+} from "@/lib/firebase/admin";
 import { storage } from "@/lib/storage";
-import { Role } from "@/types";
+import { Role, User } from "@/types";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -21,6 +29,11 @@ export async function GET(req: NextRequest) {
   const search = searchParams.get("search") || undefined;
 
   try {
+    const firestoreUsers = await getAllUsersFromFirestore();
+    if (firestoreUsers.length > 0) {
+      storage.syncUsersFromFirestore(firestoreUsers);
+    }
+
     const employees = storage.getEmployeesWithWorkload({ role, department, status, search });
     return NextResponse.json({ success: true, data: employees });
   } catch (err: any) {
@@ -81,7 +94,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const newUser = {
+    const newUser: User = {
       id: uid,
       uid,
       employeeCode: employeeCode || `EMP-${Math.floor(100 + Math.random() * 900)}`,
@@ -95,11 +108,14 @@ export async function POST(req: NextRequest) {
       designation: designation || role,
       active: true,
       status: "ACTIVE" as const,
+      approvalStatus: "APPROVED" as const,
+      mustChangePassword: false,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
-    const userRes = storage.createUser(newUser as any);
+    const userRes = storage.createUser(newUser);
+    await saveUserToFirestore(newUser);
 
     // Audit log
     storage.getGlobalActivity({ limit: 1 }); // ensures db loaded

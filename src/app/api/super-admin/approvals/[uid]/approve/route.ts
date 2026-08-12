@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storage } from "@/lib/storage";
-import { verifySuperAdminToken, adminAuth } from "@/lib/firebase/admin";
+import {
+  verifySuperAdminToken,
+  adminAuth,
+  saveUserToFirestore,
+  getUserFromFirestore,
+} from "@/lib/firebase/admin";
 import { Role } from "@/types";
 
 export async function POST(req: NextRequest, { params }: { params: { uid: string } }) {
@@ -30,6 +35,16 @@ export async function POST(req: NextRequest, { params }: { params: { uid: string
       );
     }
 
+    // Ensure user exists in local storage if only present in Firestore
+    let localUser = storage.getUserById(uid);
+    if (!localUser) {
+      const fUser = await getUserFromFirestore(uid);
+      if (fUser) {
+        storage.createUser(fUser);
+        localUser = fUser;
+      }
+    }
+
     // Set Firebase Auth Custom Claims for the approved employee
     try {
       await adminAuth.setCustomUserClaims(uid, {
@@ -51,9 +66,14 @@ export async function POST(req: NextRequest, { params }: { params: { uid: string
       userAgent,
     });
 
-    if (!result.success) {
+    if (!result.success || !result.user) {
       return NextResponse.json({ success: false, error: result.error }, { status: 400 });
     }
+
+    // Persist approved user directly to Firestore
+    await saveUserToFirestore(result.user);
+
+    console.info(`[APPROVE] Successfully approved employee ${result.user.email} (Role: ${role}, Status: APPROVED)`);
 
     return NextResponse.json({
       success: true,

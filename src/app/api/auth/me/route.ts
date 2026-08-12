@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/storage";
-import { verifyAuthToken } from "@/lib/firebase/admin";
+import {
+  verifyAuthToken,
+  getUserFromFirestore,
+  getUserByEmailFromFirestore,
+  saveUserToFirestore,
+} from "@/lib/firebase/admin";
 import { User } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -26,19 +31,33 @@ export async function GET(req: NextRequest) {
     const users = db.getUsers();
     let user = users.find((u) => u.uid === uid || u.id === uid);
 
-    // One-time migration: If profile exists under user's email prior to Firebase UID assignment,
-    // update the database user record so id === uid === firebaseAuthUid
+    // 1. One-time migration: If profile exists under user's email prior to Firebase UID assignment
     if (!user && cleanEmail) {
       const userByEmail = users.find((u) => u.email?.trim().toLowerCase() === cleanEmail);
       if (userByEmail) {
         userByEmail.id = uid;
         userByEmail.uid = uid;
         db.createUser(userByEmail);
+        await saveUserToFirestore(userByEmail);
         user = userByEmail;
       }
     }
 
-    // Auto-provision Super Admin if authenticating as the official root email
+    // 2. Check persistent Firestore if not found in local memory
+    if (!user) {
+      let firestoreUser = await getUserFromFirestore(uid);
+      if (!firestoreUser && cleanEmail) {
+        firestoreUser = await getUserByEmailFromFirestore(cleanEmail);
+      }
+      if (firestoreUser) {
+        firestoreUser.id = uid;
+        firestoreUser.uid = uid;
+        db.createUser(firestoreUser);
+        user = firestoreUser;
+      }
+    }
+
+    // 3. Auto-provision Super Admin if authenticating as the official root email
     if (!user && cleanEmail === "vertxenergies@gmail.com") {
       const superAdminUser: User = {
         id: uid,
@@ -64,10 +83,11 @@ export async function GET(req: NextRequest) {
         lastActiveAt: new Date().toISOString(),
       };
       db.createUser(superAdminUser);
+      await saveUserToFirestore(superAdminUser);
       user = superAdminUser;
     }
 
-    // If a legitimate Firebase authenticated employee is not in local db yet, create a PENDING record
+    // 4. If a legitimate Firebase authenticated employee is not in local db yet, create a PENDING record
     if (!user && cleanEmail) {
       const pendingEmployee: User = {
         id: uid,
@@ -90,6 +110,7 @@ export async function GET(req: NextRequest) {
         updatedAt: new Date().toISOString(),
       };
       db.createUser(pendingEmployee);
+      await saveUserToFirestore(pendingEmployee);
       user = pendingEmployee;
     }
 

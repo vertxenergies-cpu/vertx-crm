@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storage } from "@/lib/storage";
-import { verifySuperAdminToken } from "@/lib/firebase/admin";
+import { verifySuperAdminToken, getAllUsersFromFirestore } from "@/lib/firebase/admin";
 import { ApprovalStatus } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,12 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // Sync all users from Firestore to guarantee cross-serverless consistency
+    const firestoreUsers = await getAllUsersFromFirestore();
+    if (firestoreUsers.length > 0) {
+      storage.syncUsersFromFirestore(firestoreUsers);
+    }
+
     const { searchParams } = new URL(req.url);
     const statusParam = searchParams.get("status") as ApprovalStatus | null;
 
@@ -25,6 +31,8 @@ export async function GET(req: NextRequest) {
     const pending = queue.filter((u) => u.approvalStatus === "PENDING");
     const approved = queue.filter((u) => u.approvalStatus === "APPROVED");
     const rejected = queue.filter((u) => u.approvalStatus === "REJECTED");
+
+    console.info(`[APPROVALS] Fetching pending employees: Found ${pending.length} pending, ${queue.length} total`);
 
     return NextResponse.json({
       success: true,

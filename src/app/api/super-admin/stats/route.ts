@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySuperAdminToken } from "@/lib/firebase/admin";
+import { verifySuperAdminToken, getAllUsersFromFirestore } from "@/lib/firebase/admin";
 import { storage } from "@/lib/storage";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
@@ -14,6 +16,11 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const firestoreUsers = await getAllUsersFromFirestore();
+    if (firestoreUsers.length > 0) {
+      storage.syncUsersFromFirestore(firestoreUsers);
+    }
+
     const stats = storage.getSuperAdminStats();
     return NextResponse.json({ success: true, data: stats });
   } catch (err: any) {

@@ -137,6 +137,30 @@ export const db = {
     return user;
   },
 
+  syncUsersFromFirestore(firestoreUsers: User[]): void {
+    if (!Array.isArray(firestoreUsers) || firestoreUsers.length === 0) return;
+    const data = ensureDataFile();
+    let changed = false;
+    for (const fUser of firestoreUsers) {
+      if (!fUser.uid && !fUser.id && !fUser.email) continue;
+      const idx = data.users.findIndex(
+        (u) =>
+          (fUser.uid && (u.uid === fUser.uid || u.id === fUser.uid)) ||
+          (fUser.email && u.email.toLowerCase() === fUser.email.toLowerCase())
+      );
+      if (idx >= 0) {
+        data.users[idx] = { ...data.users[idx], ...fUser };
+        changed = true;
+      } else {
+        data.users.push(fUser);
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveDataFile(data);
+    }
+  },
+
   updateUserPasswordStatus(uidOrEmail: string, mustChangePassword: boolean): { success: boolean; error?: string } {
     const data = ensureDataFile();
     const lower = uidOrEmail.trim().toLowerCase();
