@@ -89,7 +89,7 @@ export default function SettingsPage() {
           {activeTab === "pipeline" && (
             <div className="space-y-6">
               <div>
-                <h3 className="font-bold text-sm text-slate-900 mb-2">Solar Project Lifecycle Stages (10 Stages)</h3>
+                <h3 className="font-bold text-sm text-slate-900 mb-2">Solar Project Lifecycle Stages (12 Stages)</h3>
                 <p className="text-xs text-slate-500 mb-4">
                   Standard operational milestones from booking confirmation to PM Surya Ghar subsidy claim.
                 </p>

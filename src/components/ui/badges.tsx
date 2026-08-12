@@ -11,7 +11,7 @@ import {
   InstallationStatus,
   SubsidyStatus,
 } from "@/types";
-import { PROJECT_HEALTH_CONFIG, LEAD_STAGES_CONFIG, PROJECT_STAGES_CONFIG } from "@/lib/constants";
+import { PROJECT_HEALTH_CONFIG, LEAD_STAGES_CONFIG, PROJECT_STAGES_CONFIG, normalizeStageId } from "@/lib/constants";
 import { clsx } from "clsx";
 
 export function HealthBadge({ health }: { health: ProjectHealth }) {
@@ -32,18 +32,28 @@ export function HealthBadge({ health }: { health: ProjectHealth }) {
 }
 
 export function ProjectStageBadge({ stage }: { stage: ProjectStage }) {
-  const cfg = PROJECT_STAGES_CONFIG.find((s) => s.id === stage);
-  const label = cfg?.shortLabel || stage;
+  const normalized = normalizeStageId(stage);
+  const cfg = PROJECT_STAGES_CONFIG.find((s) => normalizeStageId(s.id) === normalized);
+  const label = cfg?.label || cfg?.shortLabel || stage;
 
-  let colorClasses = "bg-blue-50 text-blue-700 border-blue-200";
-  if (stage === "COMPLETED") colorClasses = "bg-emerald-50 text-emerald-700 border-emerald-200";
-  if (stage === "ON_HOLD") colorClasses = "bg-slate-100 text-slate-700 border-slate-300";
-  if (stage === "CANCELLED") colorClasses = "bg-rose-50 text-rose-700 border-rose-200";
-  if (stage === "INSTALLATION") colorClasses = "bg-amber-50 text-amber-800 border-amber-200";
-  if (stage === "KSEB_INSPECTION" || stage === "NET_METER") colorClasses = "bg-purple-50 text-purple-700 border-purple-200";
+  let colorClasses = "bg-blue-50 text-blue-800 border-blue-200";
+  if (normalized === "BOOKING") colorClasses = "bg-blue-50 text-blue-700 border-blue-200";
+  if (normalized === "DOCUMENTS") colorClasses = "bg-purple-50 text-purple-700 border-purple-200";
+  if (normalized === "LOAN_READYCASH") colorClasses = "bg-indigo-50 text-indigo-700 border-indigo-200";
+  if (normalized === "KSEB_FEASIBILITY") colorClasses = "bg-cyan-50 text-cyan-800 border-cyan-200";
+  if (normalized === "EQUIPMENT_DELIVERED") colorClasses = "bg-teal-50 text-teal-800 border-teal-200";
+  if (normalized === "STRUCTURE_MATERIAL_DELIVERED") colorClasses = "bg-emerald-50 text-emerald-800 border-emerald-200";
+  if (normalized === "INSTALLATION") colorClasses = "bg-amber-50 text-amber-800 border-amber-200";
+  if (normalized === "KSEB_DCR_DOCS_SUBMITTED") colorClasses = "bg-orange-50 text-orange-800 border-orange-200";
+  if (normalized === "INSPECTION") colorClasses = "bg-rose-50 text-rose-800 border-rose-200";
+  if (normalized === "NET_METER") colorClasses = "bg-pink-50 text-pink-800 border-pink-200";
+  if (normalized === "SUBSIDY") colorClasses = "bg-violet-50 text-violet-800 border-violet-200";
+  if (normalized === "COMPLETED") colorClasses = "bg-emerald-100 text-emerald-900 border-emerald-300 font-extrabold";
+  if (normalized === "ON_HOLD") colorClasses = "bg-slate-100 text-slate-700 border-slate-300";
+  if (normalized === "CANCELLED") colorClasses = "bg-rose-50 text-rose-700 border-rose-200";
 
   return (
-    <span className={clsx("inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border", colorClasses)}>
+    <span className={clsx("inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border", colorClasses)}>
       {label}
     </span>
   );

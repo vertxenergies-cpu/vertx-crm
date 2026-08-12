@@ -100,21 +100,43 @@ export function GlobalSearchModal({ isOpen, onClose }: GlobalSearchModalProps) {
     results.leads.length > 0 ||
     results.tasks.length > 0;
 
+  const isBackdropMouseDownRef = useRef<boolean>(false);
+
+  const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      isBackdropMouseDownRef.current = true;
+    } else {
+      isBackdropMouseDownRef.current = false;
+    }
+  };
+
+  const handleBackdropMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget && isBackdropMouseDownRef.current === true) {
+      onClose();
+    }
+    isBackdropMouseDownRef.current = false;
+  };
+
   return createPortal(
     <div
       role="presentation"
       className="fixed inset-0 z-[100] flex items-start justify-center pt-16 sm:pt-24 px-4 bg-slate-950/60 backdrop-blur-xs animate-fadeIn"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          onClose();
-        }
-      }}
+      onMouseDown={handleBackdropMouseDown}
+      onMouseUp={handleBackdropMouseUp}
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-label="Global Search"
         className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh] z-[110]"
+        onMouseDown={(e) => {
+          isBackdropMouseDownRef.current = false;
+          e.stopPropagation();
+        }}
+        onMouseUp={(e) => {
+          isBackdropMouseDownRef.current = false;
+          e.stopPropagation();
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Search Header */}

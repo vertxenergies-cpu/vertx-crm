@@ -9,6 +9,7 @@ export function NotificationDropdown() {
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
 
   const fetchNotifs = async () => {
     try {
@@ -29,6 +30,17 @@ export function NotificationDropdown() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleDocumentClick);
+    return () => document.removeEventListener("mousedown", handleDocumentClick);
+  }, [isOpen]);
+
   const markAsRead = async (id: string) => {
     try {
       await fetch("/api/notifications", {
@@ -43,7 +55,7 @@ export function NotificationDropdown() {
   };
 
   return (
-    <div className="relative">
+    <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="relative p-2 rounded-lg text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition"
@@ -57,9 +69,7 @@ export function NotificationDropdown() {
       </button>
 
       {isOpen && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 animate-fadeIn">
+        <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-50 animate-fadeIn">
             <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
               <span className="text-xs font-bold text-slate-800">
                 Notifications ({unreadCount} unread)
@@ -113,7 +123,6 @@ export function NotificationDropdown() {
               )}
             </div>
           </div>
-        </>
       )}
     </div>
   );

@@ -10,6 +10,9 @@ import {
   InstallationStatus,
   SubsidyStatus,
   DutyType,
+  ProjectDeletionReason,
+  Project,
+  StageState,
 } from "@/types";
 
 export const KERALA_DISTRICTS = [
@@ -60,6 +63,45 @@ export const LEAD_STAGES_CONFIG: {
   { id: "LOST", label: "Lost", color: "text-slate-600", bgColor: "bg-slate-100 border-slate-300", order: 8 },
 ];
 
+export const CANONICAL_PROJECT_STAGES: ProjectStage[] = [
+  "BOOKING",
+  "DOCUMENTS",
+  "LOAN_READYCASH",
+  "KSEB_FEASIBILITY",
+  "EQUIPMENT_DELIVERED",
+  "STRUCTURE_MATERIAL_DELIVERED",
+  "INSTALLATION",
+  "KSEB_DCR_DOCS_SUBMITTED",
+  "INSPECTION",
+  "NET_METER",
+  "SUBSIDY",
+  "COMPLETED",
+];
+
+export function normalizeStageId(stage: string): ProjectStage {
+  if (!stage) return "BOOKING";
+  if (stage === "LOAN_READY_CASH") return "LOAN_READYCASH";
+  if (stage === "PANEL_INVERTER_DELIVERED") return "EQUIPMENT_DELIVERED";
+  return stage as ProjectStage;
+}
+
+export const NEXT_STAGE_MAP: Record<string, ProjectStage | null> = {
+  BOOKING: "DOCUMENTS",
+  DOCUMENTS: "LOAN_READYCASH",
+  LOAN_READYCASH: "KSEB_FEASIBILITY",
+  LOAN_READY_CASH: "KSEB_FEASIBILITY",
+  KSEB_FEASIBILITY: "EQUIPMENT_DELIVERED",
+  EQUIPMENT_DELIVERED: "STRUCTURE_MATERIAL_DELIVERED",
+  PANEL_INVERTER_DELIVERED: "STRUCTURE_MATERIAL_DELIVERED",
+  STRUCTURE_MATERIAL_DELIVERED: "INSTALLATION",
+  INSTALLATION: "KSEB_DCR_DOCS_SUBMITTED",
+  KSEB_DCR_DOCS_SUBMITTED: "INSPECTION",
+  INSPECTION: "NET_METER",
+  NET_METER: "SUBSIDY",
+  SUBSIDY: "COMPLETED",
+  COMPLETED: null,
+};
+
 export const PROJECT_STAGES_CONFIG: {
   id: ProjectStage;
   label: string;
@@ -67,17 +109,432 @@ export const PROJECT_STAGES_CONFIG: {
   stepNumber: number;
   description: string;
 }[] = [
-  { id: "BOOKING_CONFIRMED", label: "Booking Confirmed", shortLabel: "Booking", stepNumber: 1, description: "Customer advance received & project initiated" },
-  { id: "DOCUMENTS", label: "Documentation", shortLabel: "Documents", stepNumber: 2, description: "Collecting KYC, Bill & Property ownership docs" },
-  { id: "LOAN", label: "Loan Processing", shortLabel: "Loan", stepNumber: 3, description: "Bank / NBFC loan application & sanction" },
-  { id: "KSEB_DOCUMENTATION", label: "KSEB Documentation", shortLabel: "KSEB Docs", stepNumber: 4, description: "Preparing Soura portal feasibility & registration" },
-  { id: "KSEB_APPLICATION", label: "KSEB Application", shortLabel: "KSEB App", stepNumber: 5, description: "Application submitted & feasibility approved" },
-  { id: "INSTALLATION", label: "Installation & Commissioning", shortLabel: "Installation", stepNumber: 6, description: "Structure, panels, inverter mounting & wiring" },
-  { id: "KSEB_INSPECTION", label: "KSEB Electrical Inspection", shortLabel: "Inspection", stepNumber: 7, description: "Section engineer site verification" },
-  { id: "NET_METER", label: "Net Meter Energization", shortLabel: "Net Meter", stepNumber: 8, description: "Bi-directional solar net meter installation" },
-  { id: "SUBSIDY", label: "PM Surya Ghar Subsidy", shortLabel: "Subsidy", stepNumber: 9, description: "National portal claim submission & credit" },
-  { id: "COMPLETED", label: "Project Handover & Completed", shortLabel: "Completed", stepNumber: 10, description: "Commissioning certificate & warranty issued" },
+  { id: "BOOKING", label: "Booking", shortLabel: "Booking", stepNumber: 1, description: "Customer advance received & project booked" },
+  { id: "DOCUMENTS", label: "Documents", shortLabel: "Documents", stepNumber: 2, description: "Collecting Aadhaar, electricity bill & property ownership" },
+  { id: "LOAN_READYCASH", label: "Loan / ReadyCash", shortLabel: "Loan / ReadyCash", stepNumber: 3, description: "Bank loan processing or ReadyCash self-funding confirmation" },
+  { id: "KSEB_FEASIBILITY", label: "KSEB Feasibility", shortLabel: "KSEB Feasibility", stepNumber: 4, description: "KSEB Soura portal feasibility application & approval" },
+  { id: "EQUIPMENT_DELIVERED", label: "Panel & Inverter Delivered", shortLabel: "Panel & Inverter", stepNumber: 5, description: "Solar panels, inverter & electrical balance of plant delivered" },
+  { id: "STRUCTURE_MATERIAL_DELIVERED", label: "Structure Material Delivered", shortLabel: "Structure Delivered", stepNumber: 6, description: "Mounting structure, rails & hardware delivered to site" },
+  { id: "INSTALLATION", label: "Installation", shortLabel: "Installation", stepNumber: 7, description: "Physical solar PV array mounting & electrical installation" },
+  { id: "KSEB_DCR_DOCS_SUBMITTED", label: "KSEB DCR Docs Submitted", shortLabel: "KSEB DCR Docs", stepNumber: 8, description: "Post-installation KSEB DCR compliance documentation submitted" },
+  { id: "INSPECTION", label: "Inspection", shortLabel: "Inspection", stepNumber: 9, description: "KSEB electrical inspector site verification & approval" },
+  { id: "NET_METER", label: "Net Meter", shortLabel: "Net Meter", stepNumber: 10, description: "Bi-directional solar net meter installation & grid energization" },
+  { id: "SUBSIDY", label: "Subsidy", shortLabel: "Subsidy", stepNumber: 11, description: "PM Surya Ghar portal national subsidy claim & credit" },
+  { id: "COMPLETED", label: "Completed", shortLabel: "Completed", stepNumber: 12, description: "Solar plant fully commissioned & handed over" },
 ];
+
+export function validateCompletedStages(completedStages: ProjectStage[]): {
+  valid: boolean;
+  error?: string;
+} {
+  if (!Array.isArray(completedStages)) {
+    return { valid: false, error: "completedStages must be an array" };
+  }
+  if (completedStages.length === 0) {
+    return { valid: true };
+  }
+
+  const normalized = completedStages.map(normalizeStageId);
+  const set = new Set(normalized);
+  if (set.size !== normalized.length) {
+    return { valid: false, error: "completedStages contains duplicate stages" };
+  }
+
+  // Must strictly match canonical prefix starting at BOOKING (index 0)
+  for (let i = 0; i < normalized.length; i++) {
+    const expected = CANONICAL_PROJECT_STAGES[i];
+    if (normalized[i] !== expected) {
+      return {
+        valid: false,
+        error: `Non-contiguous completedStages sequence. Expected "${expected}" at index ${i}, but found "${normalized[i]}".`,
+      };
+    }
+  }
+
+  return { valid: true };
+}
+
+export function getStageState(
+  stageId: ProjectStage,
+  currentStage: ProjectStage,
+  completedStages?: ProjectStage[]
+): StageState {
+  const normStageId = normalizeStageId(stageId);
+  const normCurrentStage = normalizeStageId(currentStage);
+  const normalizedCompleted = (completedStages || []).map(normalizeStageId);
+
+  const stageIdx = CANONICAL_PROJECT_STAGES.indexOf(normStageId);
+  const currentIdx = CANONICAL_PROJECT_STAGES.indexOf(normCurrentStage);
+
+  // If explicitly in verified completedStages
+  if (normalizedCompleted.includes(normStageId)) {
+    return "COMPLETED";
+  }
+
+  // If project is fully COMPLETED
+  if (normCurrentStage === "COMPLETED") {
+    return "COMPLETED";
+  }
+
+  // Active current working stage
+  if (stageIdx === currentIdx) {
+    return "CURRENT";
+  }
+
+  // FUNDAMENTAL INVARIANT: A stage before currentStage is NEVER rendered as LOCKED.
+  // In strict sequential progression, any stage with index < currentIdx has already passed.
+  if (stageIdx !== -1 && currentIdx !== -1 && stageIdx < currentIdx) {
+    return "COMPLETED";
+  }
+
+  // Future stages are always LOCKED
+  return "LOCKED";
+}
+
+export function calculateProjectProgress(
+  completedStages?: ProjectStage[] | null,
+  currentStage?: ProjectStage
+): number {
+  const normCurrent = currentStage ? normalizeStageId(currentStage) : undefined;
+  if (normCurrent === "COMPLETED") return 100;
+
+  const uniqueCompleted = Array.isArray(completedStages)
+    ? Array.from(new Set(completedStages.map(normalizeStageId))).filter((s) =>
+        CANONICAL_PROJECT_STAGES.includes(s)
+      )
+    : [];
+
+  let count = uniqueCompleted.length;
+
+  if (normCurrent) {
+    const currentIdx = CANONICAL_PROJECT_STAGES.indexOf(normCurrent);
+    if (currentIdx > 0 && count < currentIdx) {
+      count = currentIdx;
+    }
+  }
+
+  return Math.min(100, Math.round((count / 12) * 100));
+}
+
+export function reconcileProjectStages(
+  project: any,
+  auditLogs?: any[]
+): {
+  completedStages: ProjectStage[];
+  currentStage: ProjectStage;
+  stageMigrationStatus: "VERIFIED" | "NEEDS_REVIEW";
+  stageMigrationNotes?: string;
+} {
+  const currentStageNorm = normalizeStageId(project.currentStage || "BOOKING");
+  const currentIdx = CANONICAL_PROJECT_STAGES.indexOf(currentStageNorm);
+  const targetCurrentIdx = currentIdx === -1 ? 0 : currentIdx;
+
+  const existingCompleted = Array.isArray(project.completedStages)
+    ? project.completedStages.map(normalizeStageId)
+    : [];
+  const validation = validateCompletedStages(existingCompleted);
+
+  if (validation.valid && existingCompleted.length === targetCurrentIdx) {
+    return {
+      completedStages: existingCompleted,
+      currentStage: currentStageNorm,
+      stageMigrationStatus: project.stageMigrationStatus || "VERIFIED",
+      stageMigrationNotes: project.stageMigrationNotes,
+    };
+  }
+
+  // Reconstruct verified contiguous stages up to targetCurrentIdx
+  const reconstructedCompleted: ProjectStage[] = [];
+  for (let i = 0; i < targetCurrentIdx; i++) {
+    reconstructedCompleted.push(CANONICAL_PROJECT_STAGES[i]);
+  }
+
+  const migrationStatus: "VERIFIED" | "NEEDS_REVIEW" =
+    project.stageMigrationStatus || "VERIFIED";
+
+  return {
+    completedStages: reconstructedCompleted,
+    currentStage: currentStageNorm,
+    stageMigrationStatus: migrationStatus,
+    stageMigrationNotes: project.stageMigrationNotes,
+  };
+}
+
+export function canCompleteStage(
+  project: Project,
+  stage: ProjectStage
+): { allowed: boolean; missingRequirements: string[] } {
+  const missingRequirements: string[] = [];
+  const normalizedStage = normalizeStageId(stage);
+
+  switch (normalizedStage) {
+    case "BOOKING": {
+      if (!project.customerId && !project.customer) {
+        missingRequirements.push("Customer details must be linked to the project.");
+      }
+      if (!project.systemSizeKw || project.systemSizeKw <= 0) {
+        missingRequirements.push("Solar system capacity (kW) must be recorded.");
+      }
+      if (!project.projectNumber) {
+        missingRequirements.push("Project booking identification number is missing.");
+      }
+      break;
+    }
+
+    case "DOCUMENTS": {
+      const docs = project.documents || [];
+      const pendingRequired = docs.filter(
+        (d) => d.isRequired && d.status === "PENDING"
+      );
+      if (pendingRequired.length > 0) {
+        missingRequirements.push(
+          `${pendingRequired.length} required document${pendingRequired.length > 1 ? "s are" : " is"} still pending (${pendingRequired.map((d) => d.title).join(", ")}).`
+        );
+      }
+      break;
+    }
+
+    case "LOAN_READYCASH": {
+      const mode = project.paymentMode || (project.loanDetail?.loanRequired ? "LOAN" : "CASH");
+      if (mode === "LOAN" || mode === "PARTIAL_LOAN" || project.loanDetail?.loanRequired) {
+        const loanStatus = project.loanDetail?.status || project.loanStatus;
+        const isApprovedOrDisbursed =
+          loanStatus === "APPROVED" ||
+          loanStatus === "DISBURSED" ||
+          loanStatus === "DISBURSEMENT_PENDING" ||
+          loanStatus === "NOT_REQUIRED" ||
+          (project.firstLoanDisbursalAmount && project.firstLoanDisbursalAmount > 0) ||
+          project.firstLoanDisbursalStatus === "COLLECTED" ||
+          Boolean(project.loanDetail?.firstDisbursal && project.loanDetail.firstDisbursal.amount > 0);
+
+        if (!isApprovedOrDisbursed) {
+          missingRequirements.push(
+            "Bank loan approval or first disbursal details must be recorded for loan-funded projects."
+          );
+        }
+      }
+      break;
+    }
+
+    case "KSEB_FEASIBILITY": {
+      const kseb = project.ksebDetail;
+      const hasConsumerNumber = Boolean(kseb?.consumerNumber || project.customer?.consumerNumber || project.customer?.ksebConsumerNumber);
+      const isFeasibilityApproved =
+        kseb?.feasibilityApproved === true ||
+        kseb?.feasibilityStatus === "APPROVED" ||
+        kseb?.status === "FEASIBILITY" ||
+        kseb?.status === "AGREEMENT" ||
+        kseb?.status === "INSPECTION" ||
+        kseb?.status === "APPROVED" ||
+        kseb?.status === "NET_METER_PENDING" ||
+        kseb?.status === "NET_METER_INSTALLED" ||
+        kseb?.status === "COMPLETED" ||
+        Boolean(kseb?.applicationNumber);
+
+      if (!hasConsumerNumber && !isFeasibilityApproved) {
+        missingRequirements.push("KSEB consumer number and Soura portal feasibility registration/approval required.");
+      }
+      break;
+    }
+
+    case "EQUIPMENT_DELIVERED": {
+      const install = project.installationDetail;
+      const panelsDelivered = Boolean(
+        install?.panelsDelivered ??
+        (install?.checklist?.find((c) => c.title.toLowerCase().includes("panel"))?.status === "COMPLETED" ||
+          install?.status === "IN_PROGRESS" ||
+          install?.status === "COMPLETED")
+      );
+      const inverterDelivered = Boolean(
+        install?.inverterDelivered ??
+        (install?.checklist?.find((c) => c.title.toLowerCase().includes("inverter"))?.status === "COMPLETED" ||
+          install?.status === "IN_PROGRESS" ||
+          install?.status === "COMPLETED")
+      );
+
+      if (!panelsDelivered) {
+        missingRequirements.push("Solar panels delivery confirmation is pending.");
+      }
+      if (!inverterDelivered) {
+        missingRequirements.push("Solar inverter delivery confirmation is pending.");
+      }
+      break;
+    }
+
+    case "STRUCTURE_MATERIAL_DELIVERED": {
+      const install = project.installationDetail;
+      const structureDelivered = Boolean(
+        install?.structureDelivered ??
+        (install?.checklist?.find((c) => c.title.toLowerCase().includes("structure"))?.status === "COMPLETED" ||
+          install?.status === "IN_PROGRESS" ||
+          install?.status === "COMPLETED")
+      );
+
+      if (!structureDelivered) {
+        missingRequirements.push("Mounting structure & hardware delivery confirmation is pending.");
+      }
+      break;
+    }
+
+    case "INSTALLATION": {
+      const install = project.installationDetail;
+      const isCompleted =
+        install?.status === "COMPLETED" ||
+        install?.installationCompleted === true ||
+        Boolean(install?.completionDate);
+
+      if (!isCompleted) {
+        missingRequirements.push("Physical solar installation completion confirmation is pending.");
+      }
+      break;
+    }
+
+    case "KSEB_DCR_DOCS_SUBMITTED": {
+      const kseb = project.ksebDetail;
+      const isSubmitted =
+        kseb?.dcrSubmitted === true ||
+        kseb?.status === "INSPECTION" ||
+        kseb?.status === "APPROVED" ||
+        kseb?.status === "NET_METER_PENDING" ||
+        kseb?.status === "NET_METER_INSTALLED" ||
+        kseb?.status === "COMPLETED";
+
+      if (!isSubmitted) {
+        missingRequirements.push("KSEB DCR compliance documentation submission confirmation is pending.");
+      }
+      break;
+    }
+
+    case "INSPECTION": {
+      const kseb = project.ksebDetail;
+      const isInspected =
+        kseb?.inspectionCompleted === true ||
+        kseb?.inspectionStatus === "PASSED" ||
+        kseb?.inspectionStatus === "COMPLETED" ||
+        kseb?.status === "APPROVED" ||
+        kseb?.status === "NET_METER_PENDING" ||
+        kseb?.status === "NET_METER_INSTALLED" ||
+        kseb?.status === "COMPLETED";
+
+      if (!isInspected) {
+        missingRequirements.push("KSEB electrical inspection completion & approval confirmation is pending.");
+      }
+      break;
+    }
+
+    case "NET_METER": {
+      const kseb = project.ksebDetail;
+      const isMeterInstalled =
+        kseb?.netMeterInstalled === true ||
+        kseb?.netMeterStatus === "INSTALLED" ||
+        kseb?.status === "NET_METER_INSTALLED" ||
+        kseb?.status === "COMPLETED" ||
+        Boolean(kseb?.netMeterInstalledDate);
+
+      if (!isMeterInstalled) {
+        missingRequirements.push("Bi-directional net meter installation and grid energization confirmation is pending.");
+      }
+      break;
+    }
+
+    case "SUBSIDY": {
+      const subsidy = project.subsidyDetail;
+      const isClaimedOrNotApplicable =
+        subsidy?.claimed === true ||
+        subsidy?.subsidySubmitted === true ||
+        subsidy?.status === "APPROVAL" ||
+        subsidy?.status === "PROCESSING" ||
+        subsidy?.status === "CREDITED" ||
+        subsidy?.status === "COMPLETED" ||
+        subsidy?.subsidyApplicable === false;
+
+      if (!isClaimedOrNotApplicable) {
+        missingRequirements.push("PM Surya Ghar national subsidy application / claim submission confirmation is pending.");
+      }
+      break;
+    }
+
+    case "COMPLETED": {
+      break;
+    }
+  }
+
+  return {
+    allowed: missingRequirements.length === 0,
+    missingRequirements,
+  };
+}
+
+export function canUserChangeProjectStage(user: any | null | undefined, targetStage: ProjectStage): boolean {
+  if (!user) return false;
+  const role = user.role;
+  if (role === "SUPER_ADMIN" || role === "ADMIN" || role === "PROJECT_MANAGER" || user.email === "vertxenergies@gmail.com") {
+    return true;
+  }
+  if (role === "DOCUMENTATION_TEAM") {
+    return targetStage === "DOCUMENTS" || targetStage === "KSEB_DCR_DOCS_SUBMITTED";
+  }
+  if (role === "KSEB_TEAM") {
+    return targetStage === "KSEB_FEASIBILITY" || targetStage === "KSEB_DCR_DOCS_SUBMITTED" || targetStage === "INSPECTION" || targetStage === "NET_METER";
+  }
+  if (role === "INSTALLATION_TEAM") {
+    return targetStage === "EQUIPMENT_DELIVERED" || targetStage === "STRUCTURE_MATERIAL_DELIVERED" || targetStage === "INSTALLATION";
+  }
+  if (role === "SURVEY_TEAM") {
+    return targetStage === "KSEB_FEASIBILITY";
+  }
+  return false;
+}
+
+export const PROJECT_DELETION_REASONS_CONFIG: {
+  id: ProjectDeletionReason;
+  label: string;
+  description: string;
+  requiresDuplicateProject?: boolean;
+  requiresNotes?: boolean;
+}[] = [
+  {
+    id: "DUPLICATE_ENTRY",
+    label: "Duplicate Entry",
+    description: "Project already exists under another active Project ID",
+    requiresDuplicateProject: true,
+  },
+  {
+    id: "CREATED_BY_MISTAKE",
+    label: "Created by Mistake",
+    description: "Erroneously created test or mistaken conversion",
+  },
+  {
+    id: "CUSTOMER_CANCELLED",
+    label: "Customer Cancelled",
+    description: "Customer explicitly cancelled or withdrew from solar project",
+  },
+  {
+    id: "TEST_DEMO",
+    label: "Test / Demo Project",
+    description: "Temporary development or demonstration record",
+  },
+  {
+    id: "INCORRECT_PROJECT",
+    label: "Incorrect Project",
+    description: "Technical mismatch, invalid site, or unfeasible structural specifications",
+  },
+  {
+    id: "OTHER",
+    label: "Other",
+    description: "Operational reason requiring custom justification",
+    requiresNotes: true,
+  },
+];
+
+export function canUserDeleteProject(user: any | null | undefined): boolean {
+  if (!user) return false;
+  if (user.email === "vertxenergies@gmail.com" || user.superAdmin || user.role === "SUPER_ADMIN" || user.role === "ADMIN") {
+    return true;
+  }
+  const perms: string[] = user.permissions || ROLES_CONFIG[user.role as Role]?.permissions || [];
+  return perms.includes("project.delete");
+}
 
 export const PROJECT_HEALTH_CONFIG: Record<
   ProjectHealth,
@@ -194,7 +651,9 @@ export const ROLES_CONFIG: Record<Role, RoleDefinition> = {
       "task.view", "task.create", "task.edit", "task.assign", "task.complete",
       "followup.view", "followup.create", "followup.edit", "followup.complete",
       "reports.view", "team.view", "team.manage", "settings.view", "settings.manage",
-      "audit.view", "user.create", "user.edit", "user.deactivate", "notifications.view"
+      "audit.view", "user.create", "user.edit", "user.deactivate", "notifications.view",
+      "payment.view", "payment.update", "payment.override",
+      "project.delete", "project.restore"
     ],
   },
   ADMIN: {
@@ -215,7 +674,9 @@ export const ROLES_CONFIG: Record<Role, RoleDefinition> = {
       "task.view", "task.create", "task.edit", "task.assign", "task.complete",
       "followup.view", "followup.create", "followup.edit", "followup.complete",
       "reports.view", "team.view", "team.manage", "settings.view", "settings.manage",
-      "audit.view", "user.create", "user.edit", "user.deactivate", "notifications.view"
+      "audit.view", "user.create", "user.edit", "user.deactivate", "notifications.view",
+      "payment.view", "payment.update", "payment.override",
+      "project.delete", "project.restore"
     ],
   },
   MANAGEMENT: {
@@ -227,7 +688,8 @@ export const ROLES_CONFIG: Record<Role, RoleDefinition> = {
       "lead.view", "customer.view", "project.view", "documents.view",
       "loan.view", "kseb.view", "installation.view", "subsidy.view",
       "duty.view", "duty.create", "duty.assign", "task.view", "followup.view",
-      "reports.view", "team.view", "settings.view", "audit.view", "notifications.view"
+      "reports.view", "team.view", "settings.view", "audit.view", "notifications.view",
+      "payment.view", "payment.update"
     ],
   },
   PROJECT_MANAGER: {
@@ -243,7 +705,8 @@ export const ROLES_CONFIG: Record<Role, RoleDefinition> = {
       "installation.view", "installation.edit", "subsidy.view", "subsidy.edit",
       "duty.view", "duty.create", "duty.edit", "duty.assign", "duty.complete",
       "task.view", "task.create", "task.edit", "task.assign", "task.complete",
-      "followup.view", "reports.view", "team.view", "notifications.view"
+      "followup.view", "reports.view", "team.view", "notifications.view",
+      "payment.view", "payment.update"
     ],
   },
   SALES_EXECUTIVE: {
@@ -258,7 +721,7 @@ export const ROLES_CONFIG: Record<Role, RoleDefinition> = {
       "loan.view", "loan.edit", "duty.view", "duty.complete",
       "task.view", "task.create", "task.complete",
       "followup.view", "followup.create", "followup.edit", "followup.complete",
-      "notifications.view"
+      "notifications.view", "payment.view"
     ],
   },
   SURVEY_TEAM: {

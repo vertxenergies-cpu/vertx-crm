@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { clsx } from "clsx";
@@ -34,11 +34,12 @@ export function Drawer({
   headerActions,
   children,
   maxWidth = "2xl",
-  closeOnBackdropClick = true,
+  closeOnBackdropClick = false,
   closeOnEsc = true,
 }: DrawerProps) {
   const [mounted, setMounted] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
+  const isBackdropMouseDownRef = useRef<boolean>(false);
 
   useEffect(() => {
     setMounted(true);
@@ -56,6 +57,17 @@ export function Drawer({
     }
   }, [isOpen]);
 
+  // Safe Close Handler
+  const handleSafeClose = useCallback(
+    (reason: "X_BUTTON" | "ESCAPE" | "BACKDROP_CLICK") => {
+      if (process.env.NODE_ENV === "development") {
+        console.debug(`[Drawer Close] Reason: ${reason} | Title:`, title, `| Timestamp:`, new Date().toISOString());
+      }
+      onClose();
+    },
+    [onClose, title]
+  );
+
   // ESC Key Listener
   useEffect(() => {
     if (!isOpen || !closeOnEsc) return;
@@ -63,25 +75,42 @@ export function Drawer({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        handleSafeClose("ESCAPE");
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, closeOnEsc, onClose]);
+  }, [isOpen, closeOnEsc, handleSafeClose]);
 
   if (!mounted || !isOpen) return null;
+
+  // Handle Backdrop Mouse Events with strict target validation
+  const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      isBackdropMouseDownRef.current = true;
+    } else {
+      isBackdropMouseDownRef.current = false;
+    }
+  };
+
+  const handleBackdropMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (
+      e.target === e.currentTarget &&
+      isBackdropMouseDownRef.current === true &&
+      closeOnBackdropClick === true
+    ) {
+      handleSafeClose("BACKDROP_CLICK");
+    }
+    isBackdropMouseDownRef.current = false;
+  };
 
   return createPortal(
     <div
       role="presentation"
       className="fixed inset-0 z-[100] bg-slate-950/60 backdrop-blur-xs flex justify-end animate-fadeIn"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && closeOnBackdropClick) {
-          onClose();
-        }
-      }}
+      onMouseDown={handleBackdropMouseDown}
+      onMouseUp={handleBackdropMouseUp}
     >
       <div
         ref={drawerRef}
@@ -92,7 +121,17 @@ export function Drawer({
           "bg-white h-full w-full shadow-2xl border-l border-slate-200 flex flex-col overflow-hidden animate-slideLeft z-[110]",
           maxWidthMap[maxWidth] || "max-w-2xl"
         )}
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          isBackdropMouseDownRef.current = false;
+          e.stopPropagation();
+        }}
+        onMouseUp={(e) => {
+          isBackdropMouseDownRef.current = false;
+          e.stopPropagation();
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+        }}
       >
         {/* Drawer Header - Pinned */}
         <div className="p-4 sm:px-6 sm:py-4 border-b bg-slate-50 flex items-center justify-between shrink-0">
@@ -106,7 +145,7 @@ export function Drawer({
             <button
               type="button"
               aria-label="Close"
-              onClick={onClose}
+              onClick={() => handleSafeClose("X_BUTTON")}
               className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-200/60 transition cursor-pointer"
             >
               <X className="w-5 h-5" />

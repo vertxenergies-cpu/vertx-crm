@@ -23,6 +23,9 @@ import {
   FileText,
   UserCheck,
   Send,
+  UserCheck2,
+  ShieldAlert,
+  ArrowRightLeft,
 } from "lucide-react";
 import { Lead, User, LeadStage, LeadPriority } from "@/types";
 import { LeadStageBadge, PriorityBadge } from "@/components/ui/badges";
@@ -35,7 +38,7 @@ import { clsx } from "clsx";
 
 export default function LeadsPage() {
   return (
-    <Suspense fallback={<div className="p-6 text-xs text-slate-500 animate-pulse">Loading leads...</div>}>
+    <Suspense fallback={<div className="p-6 text-xs text-slate-500 animate-pulse">Loading solar leads...</div>}>
       <LeadsContent />
     </Suspense>
   );
@@ -44,11 +47,18 @@ export default function LeadsPage() {
 function LeadsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { allUsers, currentUser } = useAuth();
+  const { allUsers, currentUser, isSuperAdmin, permissions } = useAuth();
 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<"table" | "kanban">("table");
+
+  // Filter Active & Approved Employees Only (Excludes pending, rejected, inactive, suspended)
+  const activeApprovedEmployees = allUsers.filter(
+    (u) =>
+      (u.approvalStatus === "APPROVED" || u.superAdmin === true) &&
+      (u.status === "ACTIVE" || u.active === true)
+  );
 
   // Filters
   const [search, setSearch] = useState("");
@@ -62,6 +72,7 @@ function LeadsContent() {
   const [createModalOpen, setCreateModalOpen] = useState(searchParams.get("action") === "create");
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [convertModalOpen, setConvertModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Synchronize modal open state with URL action param
   useEffect(() => {
@@ -77,6 +88,10 @@ function LeadsContent() {
     }
   };
 
+  // Default Assignee Resolution logic
+  const defaultAssigneeUid =
+    currentUser?.role === "SALES_EXECUTIVE" ? currentUser.uid : "";
+
   // Form State for new lead
   const [formData, setFormData] = useState({
     customerName: "",
@@ -86,12 +101,19 @@ function LeadsContent() {
     address: "",
     district: "Kozhikode",
     leadSource: "Meta Ads",
-    assignedSalespersonId: "usr-super-admin",
+    assignedToUid: defaultAssigneeUid,
     priority: "HOT" as LeadPriority,
     estimatedSystemSizeKw: "5.0",
     monthlyElectricityBill: "5000",
     requirementNotes: "",
   });
+
+  // Keep default assignedToUid aligned with authenticated user role on load
+  useEffect(() => {
+    if (currentUser?.role === "SALES_EXECUTIVE" && !formData.assignedToUid) {
+      setFormData((prev) => ({ ...prev, assignedToUid: currentUser.uid }));
+    }
+  }, [currentUser]);
 
   // Conversion Form State
   const [conversionData, setConversionData] = useState({
@@ -99,7 +121,7 @@ function LeadsContent() {
     projectValue: "285000",
     ksebConsumerNumber: "",
     ksebSection: "",
-    projectManagerId: "usr-super-admin",
+    projectManagerId: currentUser?.uid || "usr-super-admin",
   });
 
   // Notes & Followups on Selected Lead
@@ -118,7 +140,7 @@ function LeadsContent() {
         setLeads(data.data);
       }
     } catch (err) {
-      console.error(err);
+      console.error("Fetch leads error:", err);
     } finally {
       setLoading(false);
     }
@@ -130,11 +152,16 @@ function LeadsContent() {
 
   const handleCreateLead = async (e: React.FormEvent) => {
     e.preventDefault();
+    setIsSubmitting(true);
     try {
       const res = await fetch("/api/leads", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          _userId: currentUser?.uid,
+          _userName: currentUser?.name,
+        }),
       });
       const data = await res.json();
       if (data.success) {
@@ -147,16 +174,46 @@ function LeadsContent() {
           address: "",
           district: "Kozhikode",
           leadSource: "Meta Ads",
-          assignedSalespersonId: "usr-super-admin",
+          assignedToUid: defaultAssigneeUid,
           priority: "HOT",
           estimatedSystemSizeKw: "5.0",
           monthlyElectricityBill: "5000",
           requirementNotes: "",
         });
         fetchLeads();
+      } else {
+        alert(`Lead creation error: ${data.error}`);
       }
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Create lead error:", err);
+      alert("Failed to create lead. Please check network connection.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReassignLead = async (leadId: string, targetUid: string) => {
+    try {
+      const res = await fetch(`/api/leads/${leadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assignedToUid: targetUid || null,
+          _userId: currentUser?.uid,
+          _userName: currentUser?.name,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        fetchLeads();
+        if (selectedLead && selectedLead.id === leadId) {
+          setSelectedLead(data.data);
+        }
+      } else {
+        alert(`Reassignment failed: ${data.error}`);
+      }
+    } catch (err: any) {
+      console.error("Reassign lead error:", err);
     }
   };
 
@@ -165,7 +222,11 @@ function LeadsContent() {
       const res = await fetch(`/api/leads/${leadId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ currentStage: newStage, _userId: currentUser?.id || "usr-super-admin" }),
+        body: JSON.stringify({
+          currentStage: newStage,
+          _userId: currentUser?.uid,
+          _userName: currentUser?.name,
+        }),
       });
       const data = await res.json();
       if (data.success) {
@@ -175,7 +236,7 @@ function LeadsContent() {
         }
       }
     } catch (err) {
-      console.error(err);
+      console.error("Stage change error:", err);
     }
   };
 
@@ -186,10 +247,9 @@ function LeadsContent() {
       projectValue: String((lead.estimatedSystemSizeKw || 5.0) * 57000),
       ksebConsumerNumber: "",
       ksebSection: `${lead.district} Town`,
-      projectManagerId: "usr-super-admin",
+      projectManagerId: currentUser?.uid || "usr-super-admin",
     });
 
-    // fetch notes
     try {
       const res = await fetch(`/api/notes?entityType=LEAD&entityId=${lead.id}`);
       const data = await res.json();
@@ -208,8 +268,8 @@ function LeadsContent() {
         body: JSON.stringify({
           entityType: "LEAD",
           entityId: selectedLead.id,
-          authorId: currentUser?.id || "usr-super-admin",
-          authorName: currentUser?.name || "Solar Specialist",
+          authorId: currentUser?.uid || currentUser?.id,
+          authorName: currentUser?.name || "Staff",
           content: newNoteText,
         }),
       });
@@ -231,7 +291,7 @@ function LeadsContent() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           leadId: selectedLead.id,
-          assignedUserId: selectedLead.assignedSalespersonId || currentUser?.id || "usr-super-admin",
+          assignedUserId: selectedLead.assignedToUid || currentUser?.uid || "usr-super-admin",
           dueDate: new Date(followUpDate).toISOString(),
           actionType: followUpAction,
           notes: followUpNote,
@@ -259,7 +319,7 @@ function LeadsContent() {
           ksebConsumerNumber: conversionData.ksebConsumerNumber,
           ksebSection: conversionData.ksebSection,
           projectManagerId: conversionData.projectManagerId,
-          _userId: currentUser?.id || "usr-super-admin",
+          _userId: currentUser?.uid,
         }),
       });
       const data = await res.json();
@@ -277,13 +337,14 @@ function LeadsContent() {
   };
 
   const handleExportCSV = () => {
-    const headers = ["Lead ID", "Customer Name", "Phone", "District", "Source", "System Size (kW)", "Stage", "Priority", "Created Date"];
+    const headers = ["Lead ID", "Customer Name", "Phone", "District", "Source", "Assigned Salesperson", "System Size (kW)", "Stage", "Priority", "Created Date"];
     const rows = filteredLeads.map((l) => [
       l.leadNumber,
       `"${l.customerName}"`,
       l.phone,
       l.district,
       l.leadSource,
+      `"${l.assignedToName || "Unassigned"}"`,
       l.estimatedSystemSizeKw,
       l.currentStage,
       l.priority,
@@ -299,32 +360,50 @@ function LeadsContent() {
     link.click();
   };
 
-  // Filtered Leads
+  // Unassigned counter badge
+  const unassignedCount = leads.filter((l) => !l.assignedToUid).length;
+  const myLeadsCount = leads.filter((l) => l.assignedToUid === currentUser?.uid).length;
+
+  // Filtered Leads logic
   const filteredLeads = leads.filter((l) => {
     const matchesSearch =
       !search ||
       l.customerName.toLowerCase().includes(search.toLowerCase()) ||
       l.phone.includes(search) ||
       l.leadNumber.toLowerCase().includes(search.toLowerCase()) ||
-      l.district.toLowerCase().includes(search.toLowerCase());
+      l.district.toLowerCase().includes(search.toLowerCase()) ||
+      (l.assignedToName && l.assignedToName.toLowerCase().includes(search.toLowerCase()));
 
     const matchesStage = selectedStage === "ALL" || l.currentStage === selectedStage;
     const matchesPriority = selectedPriority === "ALL" || l.priority === selectedPriority;
     const matchesDistrict = selectedDistrict === "ALL" || l.district === selectedDistrict;
-    const matchesSalesperson = selectedSalesperson === "ALL" || l.assignedSalespersonId === selectedSalesperson;
+
+    let matchesSalesperson = true;
+    if (selectedSalesperson === "MY_LEADS") {
+      matchesSalesperson = l.assignedToUid === currentUser?.uid;
+    } else if (selectedSalesperson === "UNASSIGNED") {
+      matchesSalesperson = !l.assignedToUid;
+    } else if (selectedSalesperson !== "ALL") {
+      matchesSalesperson = l.assignedToUid === selectedSalesperson || l.assignedSalespersonId === selectedSalesperson;
+    }
+
     const matchesSource = selectedSource === "ALL" || l.leadSource === selectedSource;
 
     return matchesSearch && matchesStage && matchesPriority && matchesDistrict && matchesSalesperson && matchesSource;
   });
 
+  const canReassign = isSuperAdmin || currentUser?.role === "ADMIN" || permissions.includes("lead.assign");
+
   return (
-    <div className="space-y-6 animate-fadeIn">
+    <div className="space-y-6 animate-fadeIn pb-12">
       {/* Header & Controls */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">Solar Lead Pipeline</h1>
+          <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight flex items-center gap-2">
+            Solar Lead Pipeline
+          </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Capture, qualify and convert solar enquiries across 14 Kerala districts.
+            Work assignment system and enquiry management across 14 Kerala districts.
           </p>
         </div>
 
@@ -334,8 +413,8 @@ function LeadsContent() {
             <button
               onClick={() => setViewMode("table")}
               className={clsx(
-                "p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition",
-                viewMode === "table" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                "p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer",
+                viewMode === "table" ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
               )}
             >
               <TableIcon className="w-4 h-4" /> Table
@@ -343,8 +422,8 @@ function LeadsContent() {
             <button
               onClick={() => setViewMode("kanban")}
               className={clsx(
-                "p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition",
-                viewMode === "kanban" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                "p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer",
+                viewMode === "kanban" ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
               )}
             >
               <Kanban className="w-4 h-4" /> Pipeline
@@ -353,7 +432,7 @@ function LeadsContent() {
 
           <button
             onClick={handleExportCSV}
-            className="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-slate-700 text-xs font-medium shadow-sm transition flex items-center gap-1.5"
+            className="p-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-slate-700 text-xs font-medium shadow-xs transition flex items-center gap-1.5 cursor-pointer"
             title="Export CSV"
           >
             <Download className="w-4 h-4" />
@@ -361,7 +440,7 @@ function LeadsContent() {
 
           <button
             onClick={() => setCreateModalOpen(true)}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/20 transition flex items-center gap-1.5"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/20 transition flex items-center gap-1.5 cursor-pointer"
           >
             <UserPlus className="w-4 h-4" /> Create Lead
           </button>
@@ -369,7 +448,7 @@ function LeadsContent() {
       </div>
 
       {/* Filter Bar */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm space-y-3">
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
           {/* Search */}
           <div className="lg:col-span-2 relative">
@@ -378,8 +457,8 @@ function LeadsContent() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search customer, phone, lead #..."
-              className="w-full text-xs pl-9 pr-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              placeholder="Search customer, phone, lead #, assignee..."
+              className="w-full text-xs pl-9 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
             />
           </div>
 
@@ -388,7 +467,7 @@ function LeadsContent() {
             <select
               value={selectedStage}
               onChange={(e) => setSelectedStage(e.target.value)}
-              className="w-full text-xs px-2.5 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
             >
               <option value="ALL">All Stages</option>
               {LEAD_STAGES_CONFIG.map((s) => (
@@ -404,7 +483,7 @@ function LeadsContent() {
             <select
               value={selectedDistrict}
               onChange={(e) => setSelectedDistrict(e.target.value)}
-              className="w-full text-xs px-2.5 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
             >
               <option value="ALL">All Districts</option>
               {KERALA_DISTRICTS.map((d) => (
@@ -420,7 +499,7 @@ function LeadsContent() {
             <select
               value={selectedPriority}
               onChange={(e) => setSelectedPriority(e.target.value)}
-              className="w-full text-xs px-2.5 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
             >
               <option value="ALL">All Priorities</option>
               <option value="HOT">🔥 Hot</option>
@@ -430,21 +509,21 @@ function LeadsContent() {
             </select>
           </div>
 
-          {/* Salesperson Filter */}
+          {/* Salesperson & Work Assignment Filter */}
           <div>
             <select
               value={selectedSalesperson}
               onChange={(e) => setSelectedSalesperson(e.target.value)}
-              className="w-full text-xs px-2.5 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium"
             >
-              <option value="ALL">All Sales Reps</option>
-              {allUsers
-                .filter((u) => u.role === "SALES_EXECUTIVE" || u.role === "ADMIN")
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                  </option>
-                ))}
+              <option value="ALL">All Assignees & Queue</option>
+              <option value="MY_LEADS">My Assigned Leads ({myLeadsCount})</option>
+              <option value="UNASSIGNED">Unassigned Queue ({unassignedCount})</option>
+              {activeApprovedEmployees.map((u) => (
+                <option key={u.uid || u.id} value={u.uid || u.id}>
+                  {u.name} ({u.role?.replace(/_/g, " ")})
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -452,12 +531,12 @@ function LeadsContent() {
 
       {/* View: Table View */}
       {viewMode === "table" ? (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
           {filteredLeads.length === 0 ? (
             <EmptyState
               icon={UserPlus}
               title="No Leads Found"
-              description="No leads match your current search and filter criteria. Adjust your filters or add a new enquiry."
+              description="No leads match your current search and filter criteria. Adjust your filters or create a new lead."
               actionLabel="Add Lead"
               onAction={() => setCreateModalOpen(true)}
             />
@@ -471,7 +550,7 @@ function LeadsContent() {
                     <th className="py-3.5 px-4">District</th>
                     <th className="py-3.5 px-4">Capacity</th>
                     <th className="py-3.5 px-4">Source</th>
-                    <th className="py-3.5 px-4">Salesperson</th>
+                    <th className="py-3.5 px-4">Salesperson / Assignee</th>
                     <th className="py-3.5 px-4">Stage</th>
                     <th className="py-3.5 px-4">Priority</th>
                     <th className="py-3.5 px-4 text-right">Actions</th>
@@ -497,7 +576,7 @@ function LeadsContent() {
                       </td>
 
                       <td className="py-3.5 px-4">
-                        <span className="inline-flex items-center gap-1 text-slate-700">
+                        <span className="inline-flex items-center gap-1 text-slate-700 font-medium">
                           <MapPin className="w-3.5 h-3.5 text-slate-400" /> {lead.district}
                         </span>
                       </td>
@@ -508,8 +587,26 @@ function LeadsContent() {
 
                       <td className="py-3.5 px-4 text-slate-600">{lead.leadSource}</td>
 
-                      <td className="py-3.5 px-4 text-slate-700 font-medium">
-                        {lead.assignedSalesperson?.name || "Unassigned"}
+                      <td className="py-3.5 px-4">
+                        {lead.assignedToUid ? (
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-800 text-[10px] font-extrabold flex items-center justify-center border border-blue-200 shrink-0">
+                              {(lead.assignedToName || lead.assignedSalesperson?.name || "SE").slice(0, 2).toUpperCase()}
+                            </span>
+                            <div>
+                              <div className="text-slate-900 font-bold text-xs">
+                                {lead.assignedToName || lead.assignedSalesperson?.name}
+                              </div>
+                              <div className="text-[10px] text-slate-400 font-mono">
+                                {lead.assignedDepartment || "Sales & Marketing"}
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
+                            Unassigned
+                          </span>
+                        )}
                       </td>
 
                       <td className="py-3.5 px-4">
@@ -579,9 +676,11 @@ function LeadsContent() {
                           <span className="text-slate-500">{lead.district}</span>
                         </div>
 
-                        <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-                          <span>{lead.assignedSalesperson?.name || "Sales"}</span>
-                          <span>{lead.leadSource}</span>
+                        <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500 font-medium">
+                          <span className={lead.assignedToUid ? "text-slate-700 font-semibold" : "text-amber-700 font-bold"}>
+                            {lead.assignedToName || lead.assignedSalesperson?.name || "Unassigned"}
+                          </span>
+                          <span className="text-slate-400">{lead.leadSource}</span>
                         </div>
                       </div>
                     ))}
@@ -612,9 +711,10 @@ function LeadsContent() {
             <button
               type="submit"
               form="create-lead-form"
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/20 transition cursor-pointer"
+              disabled={isSubmitting}
+              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-600/20 transition cursor-pointer disabled:opacity-50"
             >
-              Save & Create Lead
+              {isSubmitting ? "Creating..." : "Save & Create Lead"}
             </button>
           </>
         }
@@ -628,8 +728,8 @@ function LeadsContent() {
                 required
                 value={formData.customerName}
                 onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
-                placeholder="e.g. Muhammed Shihab"
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                placeholder="e.g. Sineesh"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               />
             </div>
 
@@ -640,8 +740,8 @@ function LeadsContent() {
                 required
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                placeholder="+91 98470 XXXXX"
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                placeholder="+91 96338 05718"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               />
             </div>
 
@@ -651,8 +751,8 @@ function LeadsContent() {
                 type="text"
                 value={formData.whatsapp}
                 onChange={(e) => setFormData({ ...formData, whatsapp: e.target.value })}
-                placeholder="+91 98470 XXXXX"
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                placeholder="+91 96338 05718"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               />
             </div>
 
@@ -663,7 +763,7 @@ function LeadsContent() {
                 value={formData.email}
                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                 placeholder="customer@gmail.com"
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               />
             </div>
 
@@ -672,7 +772,7 @@ function LeadsContent() {
               <select
                 value={formData.district}
                 onChange={(e) => setFormData({ ...formData, district: e.target.value })}
-                className="w-full text-xs px-3 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               >
                 {KERALA_DISTRICTS.map((d) => (
                   <option key={d} value={d}>
@@ -687,7 +787,7 @@ function LeadsContent() {
               <select
                 value={formData.leadSource}
                 onChange={(e) => setFormData({ ...formData, leadSource: e.target.value })}
-                className="w-full text-xs px-3 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               >
                 {LEAD_SOURCES.map((s) => (
                   <option key={s} value={s}>
@@ -704,7 +804,7 @@ function LeadsContent() {
                 step="0.5"
                 value={formData.estimatedSystemSizeKw}
                 onChange={(e) => setFormData({ ...formData, estimatedSystemSizeKw: e.target.value })}
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               />
             </div>
 
@@ -715,7 +815,7 @@ function LeadsContent() {
                 value={formData.monthlyElectricityBill}
                 onChange={(e) => setFormData({ ...formData, monthlyElectricityBill: e.target.value })}
                 placeholder="e.g. 4500"
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               />
             </div>
 
@@ -724,7 +824,7 @@ function LeadsContent() {
               <select
                 value={formData.priority}
                 onChange={(e) => setFormData({ ...formData, priority: e.target.value as LeadPriority })}
-                className="w-full text-xs px-3 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
               >
                 <option value="HOT">🔥 Hot (Immediate Intent)</option>
                 <option value="HIGH">High Priority</option>
@@ -733,19 +833,31 @@ function LeadsContent() {
               </select>
             </div>
 
+            {/* Work Assignment Dropdown */}
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Assign Sales Representative *</label>
+              <label className="block font-semibold text-slate-700 mb-1">Assign To (Work Assignment)</label>
               <select
-                value={formData.assignedSalespersonId}
-                onChange={(e) => setFormData({ ...formData, assignedSalespersonId: e.target.value })}
-                className="w-full text-xs px-3 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                value={formData.assignedToUid}
+                onChange={(e) => setFormData({ ...formData, assignedToUid: e.target.value })}
+                className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium"
               >
-                {allUsers.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name} ({u.role?.replace(/_/g, " ") || "Staff"})
+                <option value="">Unassigned (Lead Pool Queue)</option>
+                {activeApprovedEmployees.map((u) => (
+                  <option key={u.uid || u.id} value={u.uid || u.id}>
+                    {u.name} ({u.employeeCode || "EMP"}) • {u.department || "Sales"} • {u.role}
                   </option>
                 ))}
               </select>
+              <div className="mt-1 text-[11px] font-medium">
+                {formData.assignedToUid ? (
+                  <span className="text-blue-700 font-bold">
+                    Selected: {activeApprovedEmployees.find((u) => (u.uid || u.id) === formData.assignedToUid)?.name} (
+                    {activeApprovedEmployees.find((u) => (u.uid || u.id) === formData.assignedToUid)?.department || "Sales"})
+                  </span>
+                ) : (
+                  <span className="text-amber-700 font-bold">Selected: Unassigned (Will appear in Unassigned Queue)</span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -756,7 +868,7 @@ function LeadsContent() {
               value={formData.address}
               onChange={(e) => setFormData({ ...formData, address: e.target.value })}
               placeholder="Near Post Office, Mavoor Road..."
-              className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
             />
           </div>
 
@@ -767,13 +879,13 @@ function LeadsContent() {
               value={formData.requirementNotes}
               onChange={(e) => setFormData({ ...formData, requirementNotes: e.target.value })}
               placeholder="Interested in PM Surya Ghar 78k subsidy scheme..."
-              className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
             />
           </div>
         </form>
       </Modal>
 
-      {/* LEAD DETAILS DRAWER */}
+      {/* LEAD DETAILS & REASSIGNMENT DRAWER */}
       {selectedLead && (
         <Drawer
           isOpen={!!selectedLead}
@@ -790,7 +902,7 @@ function LeadsContent() {
               <button
                 type="button"
                 onClick={() => setConvertModalOpen(true)}
-                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition flex items-center gap-1.5 cursor-pointer"
               >
                 <CheckCircle className="w-4 h-4" /> Convert to Project
               </button>
@@ -812,7 +924,7 @@ function LeadsContent() {
                       className={clsx(
                         "py-2 px-1 text-[11px] font-bold rounded-lg border text-center transition cursor-pointer",
                         isCurrent
-                          ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                          ? "bg-blue-600 text-white border-blue-600 shadow-xs"
                           : "bg-white text-slate-600 hover:bg-slate-100 border-slate-200"
                       )}
                     >
@@ -820,6 +932,55 @@ function LeadsContent() {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* Work Reassignment Box */}
+            <div className="bg-blue-50/50 p-4 rounded-xl border border-blue-200 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-blue-900 flex items-center gap-1.5">
+                  <ArrowRightLeft className="w-4 h-4 text-blue-600" /> Work Assignment Architecture
+                </span>
+                {canReassign && (
+                  <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
+                    Admin Control
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-lg border border-blue-100">
+                <div>
+                  <div className="text-slate-500 text-[11px]">Current Assigned Salesperson:</div>
+                  <div className="font-extrabold text-slate-900 text-sm flex items-center gap-1.5 mt-0.5">
+                    {selectedLead.assignedToUid ? (
+                      <>
+                        <UserCheck2 className="w-4 h-4 text-blue-600" />
+                        <span>{selectedLead.assignedToName || selectedLead.assignedSalesperson?.name}</span>
+                        <span className="text-slate-400 font-normal text-xs">({selectedLead.assignedDepartment || "Sales"})</span>
+                      </>
+                    ) : (
+                      <span className="text-amber-700">Unassigned (Pool Queue)</span>
+                    )}
+                  </div>
+                </div>
+
+                {canReassign && (
+                  <div className="shrink-0 space-y-1">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase">Reassign Lead:</label>
+                    <select
+                      value={selectedLead.assignedToUid || ""}
+                      onChange={(e) => handleReassignLead(selectedLead.id, e.target.value)}
+                      className="text-xs px-3 py-1.5 border border-slate-300 rounded-lg bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    >
+                      <option value="">Unassign (Move to Queue)</option>
+                      {activeApprovedEmployees.map((u) => (
+                        <option key={u.uid || u.id} value={u.uid || u.id}>
+                          {u.name} ({u.employeeCode || "EMP"}) • {u.role}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -868,9 +1029,9 @@ function LeadsContent() {
               </div>
 
               <div>
-                <span className="text-slate-400 block font-medium">Assigned Rep</span>
-                <span className="font-bold text-slate-800 mt-0.5 block">
-                  {selectedLead.assignedSalesperson?.name || "Unassigned"}
+                <span className="text-slate-400 block font-medium">Firebase Identity UID</span>
+                <span className="font-mono text-[11px] text-slate-600 bg-slate-100 px-2 py-0.5 rounded mt-0.5 inline-block">
+                  {selectedLead.assignedToUid || "null"}
                 </span>
               </div>
             </div>
@@ -928,7 +1089,7 @@ function LeadsContent() {
               />
               <button
                 onClick={handleAddFollowUp}
-                className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs shadow-sm transition cursor-pointer"
+                className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs shadow-xs transition cursor-pointer"
               >
                 Add Follow-up Reminder
               </button>
@@ -945,12 +1106,12 @@ function LeadsContent() {
                   value={newNoteText}
                   onChange={(e) => setNewNoteText(e.target.value)}
                   placeholder="Add an internal progress note..."
-                  className="flex-1 text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                  className="flex-1 text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
                   onKeyDown={(e) => e.key === "Enter" && handleAddNote()}
                 />
                 <button
                   onClick={handleAddNote}
-                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs shadow-sm cursor-pointer"
+                  className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs shadow-xs cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                 </button>
@@ -1016,7 +1177,7 @@ function LeadsContent() {
                 step="0.5"
                 value={conversionData.systemSizeKw}
                 onChange={(e) => setConversionData({ ...conversionData, systemSizeKw: e.target.value })}
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
             </div>
 
@@ -1026,7 +1187,7 @@ function LeadsContent() {
                 type="number"
                 value={conversionData.projectValue}
                 onChange={(e) => setConversionData({ ...conversionData, projectValue: e.target.value })}
-                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
               />
             </div>
 
@@ -1038,7 +1199,7 @@ function LeadsContent() {
                   value={conversionData.ksebConsumerNumber}
                   onChange={(e) => setConversionData({ ...conversionData, ksebConsumerNumber: e.target.value })}
                   placeholder="1155420018942"
-                  className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 />
               </div>
 
@@ -1049,7 +1210,7 @@ function LeadsContent() {
                   value={conversionData.ksebSection}
                   onChange={(e) => setConversionData({ ...conversionData, ksebSection: e.target.value })}
                   placeholder="Kozhikode Town"
-                  className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  className="w-full text-xs px-3 py-2 border rounded-lg focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                 />
               </div>
             </div>
@@ -1059,15 +1220,13 @@ function LeadsContent() {
               <select
                 value={conversionData.projectManagerId}
                 onChange={(e) => setConversionData({ ...conversionData, projectManagerId: e.target.value })}
-                className="w-full text-xs px-3 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none font-medium"
+                className="w-full text-xs px-3 py-2 border rounded-lg bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-hidden font-medium"
               >
-                {allUsers
-                  .filter((u) => u.role === "ADMIN" || u.role === "MANAGEMENT" || u.role === "PROJECT_MANAGER" || u.superAdmin || u.role === "SUPER_ADMIN")
-                  .map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name} ({u.role?.replace(/_/g, " ") || "Staff"})
-                    </option>
-                  ))}
+                {activeApprovedEmployees.map((u) => (
+                  <option key={u.uid || u.id} value={u.uid || u.id}>
+                    {u.name} ({u.role?.replace(/_/g, " ") || "Staff"})
+                  </option>
+                ))}
               </select>
             </div>
           </div>

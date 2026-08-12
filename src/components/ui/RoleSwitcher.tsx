@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { Role } from "@/types";
 import { ChevronDown, LogOut, User as UserIcon, Briefcase, Building, ShieldCheck } from "lucide-react";
@@ -10,6 +10,18 @@ import { clsx } from "clsx";
 export function RoleSwitcher() {
   const { currentUser, signOut } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleDocumentClick = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleDocumentClick);
+    return () => document.removeEventListener("mousedown", handleDocumentClick);
+  }, [isOpen]);
 
   const roleColors: Record<Role, string> = {
     SUPER_ADMIN: "bg-amber-100 text-amber-900 border-amber-300 font-extrabold",
@@ -26,7 +38,7 @@ export function RoleSwitcher() {
   const userRole = currentUser?.role || "SALES_EXECUTIVE";
 
   return (
-    <div className="relative">
+    <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-800 shadow-2xs transition cursor-pointer"
@@ -50,9 +62,7 @@ export function RoleSwitcher() {
       </button>
 
       {isOpen && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200 py-2 z-50 animate-fadeIn">
+        <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200 py-2 z-50 animate-fadeIn">
             {/* User Info Header */}
             <div className="px-4 py-3 border-b border-slate-100 space-y-1">
               <div className="flex items-center justify-between">
@@ -114,7 +124,6 @@ export function RoleSwitcher() {
               </button>
             </div>
           </div>
-        </>
       )}
     </div>
   );

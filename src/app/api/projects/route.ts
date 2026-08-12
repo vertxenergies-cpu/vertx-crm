@@ -11,6 +11,9 @@ export async function GET(req: NextRequest) {
     const projectManagerId = searchParams.get("projectManagerId") || undefined;
     const district = searchParams.get("district") || undefined;
 
+    const onlyDeleted = searchParams.get("onlyDeleted") === "true";
+    const includeDeleted = searchParams.get("includeDeleted") === "true";
+
     const result = db.getProjectsWithCounts({
       search,
       stage,
@@ -18,6 +21,8 @@ export async function GET(req: NextRequest) {
       salespersonId,
       projectManagerId,
       district,
+      onlyDeleted,
+      includeDeleted,
     });
 
     return NextResponse.json({
@@ -26,6 +31,7 @@ export async function GET(req: NextRequest) {
       total: result.total,
       stageCounts: result.stageCounts,
       healthCounts: result.healthCounts,
+      deletedCount: result.deletedCount,
     });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

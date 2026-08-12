@@ -1,10 +1,10 @@
 "use client";
-
-import React, { useEffect, useState, useRef } from "react";
+ 
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { clsx } from "clsx";
-
+ 
 export interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -17,7 +17,7 @@ export interface ModalProps {
   closeOnBackdropClick?: boolean;
   closeOnEsc?: boolean;
 }
-
+ 
 const maxWidthMap: Record<string, string> = {
   sm: "max-w-sm",
   md: "max-w-md",
@@ -27,7 +27,7 @@ const maxWidthMap: Record<string, string> = {
   "3xl": "max-w-3xl",
   "4xl": "max-w-4xl",
 };
-
+ 
 export function Modal({
   isOpen,
   onClose,
@@ -37,17 +37,18 @@ export function Modal({
   footer,
   maxWidth = "2xl",
   headerBg = "bg-slate-50",
-  closeOnBackdropClick = true,
+  closeOnBackdropClick = false,
   closeOnEsc = true,
 }: ModalProps) {
   const [mounted, setMounted] = useState(false);
   const modalRef = useRef<HTMLDivElement>(null);
-
+  const isBackdropMouseDownRef = useRef<boolean>(false);
+ 
   useEffect(() => {
     setMounted(true);
     return () => setMounted(false);
   }, []);
-
+ 
   // Body Scroll Locking
   useEffect(() => {
     if (isOpen) {
@@ -58,22 +59,33 @@ export function Modal({
       };
     }
   }, [isOpen]);
-
+ 
+  // Safe Close Handler with reason tracking
+  const handleSafeClose = useCallback(
+    (reason: "X_BUTTON" | "ESCAPE" | "BACKDROP_CLICK" | "CANCEL" | "SUBMIT") => {
+      if (process.env.NODE_ENV === "development") {
+        console.debug(`[Modal Close] Reason: ${reason} | Title:`, title, `| Timestamp:`, new Date().toISOString());
+      }
+      onClose();
+    },
+    [onClose, title]
+  );
+ 
   // ESC Key Listener
   useEffect(() => {
     if (!isOpen || !closeOnEsc) return;
-
+ 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        handleSafeClose("ESCAPE");
       }
     };
-
+ 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, closeOnEsc, onClose]);
-
+  }, [isOpen, closeOnEsc, handleSafeClose]);
+ 
   // Auto-focus first input on open
   useEffect(() => {
     if (isOpen && modalRef.current) {
@@ -85,18 +97,35 @@ export function Modal({
       }
     }
   }, [isOpen]);
-
+ 
   if (!mounted || !isOpen) return null;
-
+ 
+  // Handle Backdrop Mouse Events with strict target validation
+  const handleBackdropMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget) {
+      isBackdropMouseDownRef.current = true;
+    } else {
+      isBackdropMouseDownRef.current = false;
+    }
+  };
+ 
+  const handleBackdropMouseUp = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (
+      e.target === e.currentTarget &&
+      isBackdropMouseDownRef.current === true &&
+      closeOnBackdropClick === true
+    ) {
+      handleSafeClose("BACKDROP_CLICK");
+    }
+    isBackdropMouseDownRef.current = false;
+  };
+ 
   return createPortal(
     <div
       role="presentation"
       className="fixed inset-0 z-[100] overflow-y-auto bg-slate-950/60 backdrop-blur-xs flex min-h-screen items-center justify-center p-4 sm:p-6"
-      onClick={(e) => {
-        if (e.target === e.currentTarget && closeOnBackdropClick) {
-          onClose();
-        }
-      }}
+      onMouseDown={handleBackdropMouseDown}
+      onMouseUp={handleBackdropMouseUp}
     >
       <div
         ref={modalRef}
@@ -109,7 +138,17 @@ export function Modal({
           maxWidthMap[maxWidth] || "max-w-2xl",
           "animate-fadeIn z-[110]"
         )}
-        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => {
+          isBackdropMouseDownRef.current = false;
+          e.stopPropagation();
+        }}
+        onMouseUp={(e) => {
+          isBackdropMouseDownRef.current = false;
+          e.stopPropagation();
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+        }}
       >
         {/* Header - Fixed / Pinned */}
         <div
@@ -125,18 +164,18 @@ export function Modal({
           <button
             type="button"
             aria-label="Close"
-            onClick={onClose}
+            onClick={() => handleSafeClose("X_BUTTON")}
             className="text-slate-400 hover:text-slate-700 p-1.5 rounded-xl hover:bg-slate-200/60 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
-
+ 
         {/* Body - Scrollable */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           {children}
         </div>
-
+ 
         {/* Footer - Fixed / Pinned if provided */}
         {footer && (
           <div className="p-4 sm:px-6 sm:py-3.5 border-t bg-slate-50 shrink-0 flex items-center justify-end gap-2">

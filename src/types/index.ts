@@ -55,7 +55,12 @@ export type Permission =
   | "user.create"
   | "user.edit"
   | "user.deactivate"
-  | "notifications.view";
+  | "notifications.view"
+  | "payment.view"
+  | "payment.update"
+  | "payment.override"
+  | "project.delete"
+  | "project.restore";
 
 export type LeadPriority = "LOW" | "MEDIUM" | "HIGH" | "HOT";
 
@@ -70,18 +75,35 @@ export type LeadStage =
   | "LOST";
 
 export type ProjectStage =
-  | "BOOKING_CONFIRMED"
+  | "BOOKING"
   | "DOCUMENTS"
-  | "LOAN"
-  | "KSEB_DOCUMENTATION"
-  | "KSEB_APPLICATION"
+  | "LOAN_READYCASH"
+  | "LOAN_READY_CASH"
+  | "KSEB_FEASIBILITY"
+  | "EQUIPMENT_DELIVERED"
+  | "PANEL_INVERTER_DELIVERED"
+  | "STRUCTURE_MATERIAL_DELIVERED"
   | "INSTALLATION"
-  | "KSEB_INSPECTION"
+  | "KSEB_DCR_DOCS_SUBMITTED"
+  | "INSPECTION"
   | "NET_METER"
   | "SUBSIDY"
   | "COMPLETED"
   | "ON_HOLD"
   | "CANCELLED";
+
+export type StageState = "COMPLETED" | "CURRENT" | "LOCKED";
+
+export type StageMigrationStatus = "VERIFIED" | "NEEDS_REVIEW";
+
+export interface StageHistoryEntry {
+  stage: ProjectStage;
+  completedAt?: string | null;
+  completedBy?: string | null;
+  completedByName?: string | null;
+  completionNotes?: string | null;
+  isReconciled?: boolean;
+}
 
 export type ProjectHealth =
   | "ON_TRACK"
@@ -111,6 +133,8 @@ export type DocumentStatus = "PENDING" | "COLLECTED" | "NOT_REQUIRED";
 
 export type LoanStatus =
   | "NOT_REQUIRED"
+  | "NOT_APPLIED"
+  | "APPLIED"
   | "NOT_STARTED"
   | "APPLICATION_SUBMITTED"
   | "DOCUMENT_VERIFICATION"
@@ -256,8 +280,19 @@ export interface Lead {
   address?: string | null;
   district: string;
   leadSource: string;
-  assignedSalespersonId: string;
-  assignedSalesperson?: User;
+
+  // Canonical Work Assignment Architecture Fields
+  assignedToUid?: string | null;
+  assignedToName?: string | null;
+  assignedDepartment?: string | null;
+  assignedAt?: string | null;
+  assignedByUid?: string | null;
+  assignedByName?: string | null;
+
+  assignedSalespersonId?: string | null;
+  assignedSalesperson?: User | null;
+  salesperson?: string | null;
+
   priority: LeadPriority;
   estimatedSystemSizeKw: number;
   monthlyElectricityBill?: number | null;
@@ -309,6 +344,13 @@ export interface ProjectDocument {
   updatedAt: string;
 }
 
+export interface LoanDisbursalStage {
+  amount: number;
+  status: PaymentMilestoneStatus;
+  disbursalDate?: string | null;
+  notes?: string | null;
+}
+
 export interface LoanDetail {
   id: string;
   projectId: string;
@@ -321,6 +363,8 @@ export interface LoanDetail {
   assignedEmployeeId?: string | null;
   assignedEmployee?: User | null;
   notes?: string | null;
+  firstDisbursal?: LoanDisbursalStage | null;
+  secondDisbursal?: LoanDisbursalStage | null;
   updatedAt: string;
 }
 
@@ -334,10 +378,15 @@ export interface KsebDetail {
   applicationDate?: string | null;
   status: KsebStatus;
   feasibilityStatus?: string | null;
+  feasibilityApproved?: boolean;
   agreementStatus?: string | null;
   inspectionDate?: string | null;
   inspectionStatus?: string | null;
+  inspectionCompleted?: boolean;
+  dcrSubmitted?: boolean;
+  workCompletionSubmitted?: boolean;
   netMeterStatus?: string | null;
+  netMeterInstalled?: boolean;
   netMeterInstalledDate?: string | null;
   notes?: string | null;
   updatedAt: string;
@@ -368,6 +417,10 @@ export interface InstallationDetail {
   scheduledDate?: string | null;
   startDate?: string | null;
   completionDate?: string | null;
+  panelsDelivered?: boolean;
+  inverterDelivered?: boolean;
+  structureDelivered?: boolean;
+  installationCompleted?: boolean;
   status: InstallationStatus;
   checklist: ChecklistItem[];
   photos: PhotoProof[];
@@ -382,6 +435,8 @@ export interface SubsidyDetail {
   portalApplicationNumber?: string | null;
   applicationDate?: string | null;
   status: SubsidyStatus;
+  subsidySubmitted?: boolean;
+  claimed?: boolean;
   inspectionStatus?: string | null;
   approvalStatus?: string | null;
   creditStatus?: string | null;
@@ -431,6 +486,45 @@ export interface Task {
   updatedAt: string;
 }
 
+export type PaymentMode = "CASH" | "LOAN" | "PARTIAL_LOAN";
+
+export type PaymentMilestoneType =
+  | "INITIAL_ADVANCE"
+  | "PRE_INSTALLATION_PAYMENT"
+  | "INSTALLATION_PAYMENT"
+  | "FINAL_PAYMENT"
+  | "LOAN_APPLIED"
+  | "LOAN_APPROVED"
+  | "FIRST_LOAN_DISBURSAL"
+  | "SECOND_LOAN_DISBURSAL"
+  | "FULLY_PAID";
+
+export type PaymentMilestoneStatus =
+  | "PENDING"
+  | "DUE"
+  | "COLLECTED"
+  | "PARTIALLY_COLLECTED"
+  | "NOT_APPLICABLE";
+
+export interface PaymentMilestone {
+  id: string;
+  type: PaymentMilestoneType;
+  label: string;
+  amount: number;
+  status: PaymentMilestoneStatus;
+  dueDate?: string | null;
+  collectedDate?: string | null;
+  notes?: string | null;
+}
+
+export type ProjectDeletionReason =
+  | "DUPLICATE_ENTRY"
+  | "CREATED_BY_MISTAKE"
+  | "CUSTOMER_CANCELLED"
+  | "TEST_DEMO"
+  | "INCORRECT_PROJECT"
+  | "OTHER";
+
 export interface Project {
   id: string;
   projectNumber: string;
@@ -457,6 +551,38 @@ export interface Project {
   estimatedProjectValue?: number | null;
   accountsReferenceId?: string | null;
   accountsUrl?: string | null;
+
+  // Controlled Soft-Deletion & Audit Fields
+  deleted?: boolean;
+  deletedAt?: string | null;
+  deletedByUid?: string | null;
+  deletedByName?: string | null;
+  deletionReason?: ProjectDeletionReason | null;
+  deletionReasonDetails?: string | null;
+  duplicateOfProjectId?: string | null;
+  duplicateOfProject?: Project | null;
+
+  // Lightweight Payment Milestone Tracker Fields
+  paymentMode?: PaymentMode;
+  projectAmount?: number | null;
+  loanStatus?: LoanStatus;
+  loanAmount?: number | null;
+  firstLoanDisbursalAmount?: number | null;
+  firstLoanDisbursalStatus?: PaymentMilestoneStatus;
+  firstLoanDisbursalDate?: string | null;
+  firstLoanDisbursalNotes?: string | null;
+  secondLoanDisbursalAmount?: number | null;
+  secondLoanDisbursalStatus?: PaymentMilestoneStatus;
+  secondLoanDisbursalDate?: string | null;
+  secondLoanDisbursalNotes?: string | null;
+  loanDisbursedAmount?: number | null;
+  remainingLoanToDisburse?: number | null;
+  customerContribution?: number | null;
+  outstandingAmount?: number | null;
+  nextPaymentMilestone?: string | null;
+  lastPaymentUpdatedAt?: string | null;
+  paymentMilestones?: PaymentMilestone[];
+
   startDate: string;
   expectedCompletionDate?: string | null;
   actualCompletionDate?: string | null;
@@ -477,6 +603,13 @@ export interface Project {
   tasks?: Task[];
   duties?: Duty[];
   followUps?: FollowUp[];
+
+  // Strict Sequential EPC Stage Gating
+  completedStages?: ProjectStage[];
+  stageHistory?: StageHistoryEntry[];
+  stageMigrationStatus?: StageMigrationStatus;
+  stageMigrationNotes?: string | null;
+  stageMigrationRequired?: boolean;
 }
 
 export interface AuditLog {

@@ -27,9 +27,23 @@ import {
   EmployeeWorkloadSummary,
   CustomPermissionOverrides,
   Permission,
+  PaymentMode,
+  PaymentMilestone,
+  PaymentMilestoneStatus,
+  ProjectDeletionReason,
+  StageHistoryEntry,
 } from "@/types";
 import { generateSeedData } from "./seed-data";
-import { PROJECT_STAGES_CONFIG, ROLES_CONFIG } from "./constants";
+import {
+  PROJECT_STAGES_CONFIG,
+  ROLES_CONFIG,
+  CANONICAL_PROJECT_STAGES,
+  NEXT_STAGE_MAP,
+  normalizeStageId,
+  canCompleteStage,
+  validateCompletedStages,
+  reconcileProjectStages,
+} from "./constants";
 
 interface DatabaseSchema {
   users: User[];
@@ -138,10 +152,12 @@ export const db = {
     return { success: true };
   },
 
-  // Leads
+  // Leads - Canonical Work Assignment Architecture
   getLeads(filters?: {
     search?: string;
     salespersonId?: string;
+    assignedToUid?: string;
+    unassigned?: boolean | string;
     district?: string;
     source?: string;
     priority?: string;
@@ -150,19 +166,59 @@ export const db = {
     const data = ensureDataFile();
     let leads = [...data.leads];
 
-    if (filters?.salespersonId) {
-      leads = leads.filter((l) => l.assignedSalespersonId === filters.salespersonId);
+    // Ensure all leads have canonical assignment fields mapped
+    let needsSave = false;
+    leads.forEach((lead) => {
+      if (lead.assignedToUid === undefined) {
+        needsSave = true;
+        const legacyId = lead.assignedSalespersonId || (lead as any).salespersonId || (lead as any).assignedTo;
+        let matchedUser = data.users.find((u) => u.uid === legacyId || u.id === legacyId);
+        if (!matchedUser && legacyId && legacyId !== "usr-super-admin" && legacyId !== "unassigned") {
+          matchedUser = data.users.find((u) => u.email.toLowerCase() === String(legacyId).toLowerCase());
+        }
+        if (matchedUser && (matchedUser.approvalStatus === "APPROVED" || matchedUser.superAdmin) && (matchedUser.status === "ACTIVE" || matchedUser.active)) {
+          lead.assignedToUid = matchedUser.uid;
+          lead.assignedToName = matchedUser.name;
+          lead.assignedDepartment = matchedUser.department || "Sales & Marketing";
+          lead.assignedAt = lead.createdAt;
+          lead.assignedByUid = lead.createdBy || matchedUser.uid;
+          lead.assignedByName = matchedUser.name;
+          lead.assignedSalespersonId = matchedUser.uid;
+        } else {
+          lead.assignedToUid = null;
+          lead.assignedToName = null;
+          lead.assignedDepartment = null;
+          lead.assignedAt = null;
+          lead.assignedByUid = null;
+          lead.assignedByName = null;
+          lead.assignedSalespersonId = null;
+        }
+      }
+    });
+
+    if (needsSave) {
+      saveDataFile(data);
     }
-    if (filters?.district) {
+
+    // Filters
+    if (filters?.unassigned === true || filters?.unassigned === "true" || filters?.assignedToUid === "UNASSIGNED" || filters?.salespersonId === "UNASSIGNED") {
+      leads = leads.filter((l) => !l.assignedToUid);
+    } else if (filters?.assignedToUid && filters.assignedToUid !== "ALL") {
+      leads = leads.filter((l) => l.assignedToUid === filters.assignedToUid);
+    } else if (filters?.salespersonId && filters.salespersonId !== "ALL") {
+      leads = leads.filter((l) => l.assignedToUid === filters.salespersonId || l.assignedSalespersonId === filters.salespersonId);
+    }
+
+    if (filters?.district && filters.district !== "ALL") {
       leads = leads.filter((l) => l.district.toLowerCase() === filters.district?.toLowerCase());
     }
-    if (filters?.source) {
+    if (filters?.source && filters.source !== "ALL") {
       leads = leads.filter((l) => l.leadSource.toLowerCase() === filters.source?.toLowerCase());
     }
-    if (filters?.priority) {
+    if (filters?.priority && filters.priority !== "ALL") {
       leads = leads.filter((l) => l.priority === filters.priority);
     }
-    if (filters?.stage) {
+    if (filters?.stage && filters.stage !== "ALL") {
       leads = leads.filter((l) => l.currentStage === filters.stage);
     }
     if (filters?.search) {
@@ -172,41 +228,81 @@ export const db = {
           l.customerName.toLowerCase().includes(q) ||
           l.phone.includes(q) ||
           l.leadNumber.toLowerCase().includes(q) ||
-          l.district.toLowerCase().includes(q)
+          l.district.toLowerCase().includes(q) ||
+          (l.assignedToName && l.assignedToName.toLowerCase().includes(q))
       );
     }
 
-    // Attach salesperson
+    // Attach salesperson User object
     return leads.map((lead) => ({
       ...lead,
-      assignedSalesperson: data.users.find((u) => u.id === lead.assignedSalespersonId),
+      assignedSalesperson: lead.assignedToUid
+        ? data.users.find((u) => u.uid === lead.assignedToUid || u.id === lead.assignedToUid) || undefined
+        : undefined,
     }));
   },
 
   getLeadById(id: string): Lead | undefined {
     const data = ensureDataFile();
-    const lead = data.leads.find((l) => l.id === id);
+    const leads = this.getLeads();
+    const lead = leads.find((l) => l.id === id);
     if (!lead) return undefined;
 
     return {
       ...lead,
-      assignedSalesperson: data.users.find((u) => u.id === lead.assignedSalespersonId),
+      assignedSalesperson: lead.assignedToUid
+        ? data.users.find((u) => u.uid === lead.assignedToUid || u.id === lead.assignedToUid) || undefined
+        : undefined,
     };
   },
 
-  createLead(input: Omit<Lead, "id" | "leadNumber" | "createdAt" | "updatedAt" | "stageChangedAt">): Lead {
+  createLead(
+    input: Omit<Lead, "id" | "leadNumber" | "createdAt" | "updatedAt" | "stageChangedAt">,
+    creator?: { uid: string; name: string; role?: Role }
+  ): Lead {
     const data = ensureDataFile();
     const count = data.leads.length + 1;
     const pad = String(count).padStart(4, "0");
     const leadNumber = `LED-2026-${pad}`;
 
+    // Target assignment resolution
+    let targetUid: string | null = input.assignedToUid || input.assignedSalespersonId || null;
+    if (targetUid === "usr-super-admin" || targetUid === "UNASSIGNED" || targetUid === "") {
+      targetUid = null;
+    }
+
+    let targetUser: User | undefined = undefined;
+    if (targetUid) {
+      targetUser = data.users.find(
+        (u) =>
+          (u.uid === targetUid || u.id === targetUid) &&
+          (u.approvalStatus === "APPROVED" || u.superAdmin === true) &&
+          (u.status === "ACTIVE" || u.active === true)
+      );
+    }
+
+    const assignedToUid = targetUser ? targetUser.uid : null;
+    const assignedToName = targetUser ? targetUser.name : null;
+    const assignedDepartment = targetUser ? targetUser.department || "Sales & Marketing" : null;
+    const assignedAt = targetUser ? new Date().toISOString() : null;
+    const assignedByUid = creator?.uid || "system";
+    const assignedByName = creator?.name || "System";
+
     const newLead: Lead = {
       ...input,
       id: `lead-${Date.now()}`,
       leadNumber,
+      assignedToUid,
+      assignedToName,
+      assignedDepartment,
+      assignedAt,
+      assignedByUid,
+      assignedByName,
+      assignedSalespersonId: assignedToUid,
       stageChangedAt: new Date().toISOString(),
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      createdBy: creator?.uid,
     };
 
     data.leads.unshift(newLead);
@@ -215,24 +311,126 @@ export const db = {
     this.createAuditLog({
       entityType: "LEAD",
       entityId: newLead.id,
-      userId: input.assignedSalespersonId || "system",
-      userName: data.users.find((u) => u.id === input.assignedSalespersonId)?.name || "System",
-      userRole: "SALES_EXECUTIVE",
+      userId: creator?.uid || assignedToUid || "system",
+      userName: creator?.name || assignedToName || "System",
+      userRole: creator?.role || "ADMIN",
       action: "LEAD_CREATED",
-      field: null,
+      field: "assignedToUid",
       oldValue: null,
-      newValue: newLead.currentStage,
-      description: `Created new lead ${newLead.leadNumber} for ${newLead.customerName} (${newLead.estimatedSystemSizeKw} kW in ${newLead.district}).`,
+      newValue: assignedToUid,
+      description: `Created lead ${newLead.leadNumber} for ${newLead.customerName} (${newLead.estimatedSystemSizeKw} kW in ${newLead.district}), assigned to ${assignedToName || "Unassigned"}.`,
     });
 
     saveDataFile(data);
-    return newLead;
+    return {
+      ...newLead,
+      assignedSalesperson: targetUser,
+    };
+  },
+
+  assignLead(
+    leadId: string,
+    targetUid: string | null | undefined,
+    actor: { uid: string; name: string; role?: Role }
+  ): Lead | undefined {
+    const data = ensureDataFile();
+    const index = data.leads.findIndex((l) => l.id === leadId);
+    if (index === -1) return undefined;
+
+    const lead = data.leads[index];
+    const prevUid = lead.assignedToUid || null;
+    const prevName = lead.assignedToName || "Unassigned";
+
+    let targetUser: User | undefined = undefined;
+    if (targetUid && targetUid !== "UNASSIGNED" && targetUid !== "null" && targetUid !== "") {
+      targetUser = data.users.find(
+        (u) =>
+          (u.uid === targetUid || u.id === targetUid) &&
+          (u.approvalStatus === "APPROVED" || u.superAdmin === true) &&
+          (u.status === "ACTIVE" || u.active === true)
+      );
+
+      if (!targetUser) {
+        throw new Error("Invalid assignee: Target employee must be an approved and active staff member.");
+      }
+    }
+
+    if (targetUser) {
+      lead.assignedToUid = targetUser.uid;
+      lead.assignedToName = targetUser.name;
+      lead.assignedDepartment = targetUser.department || "Sales & Marketing";
+      lead.assignedAt = new Date().toISOString();
+      lead.assignedByUid = actor.uid;
+      lead.assignedByName = actor.name;
+      lead.assignedSalespersonId = targetUser.uid;
+    } else {
+      lead.assignedToUid = null;
+      lead.assignedToName = null;
+      lead.assignedDepartment = null;
+      lead.assignedAt = null;
+      lead.assignedByUid = actor.uid;
+      lead.assignedByName = actor.name;
+      lead.assignedSalespersonId = null;
+    }
+
+    lead.updatedAt = new Date().toISOString();
+    data.leads[index] = lead;
+
+    // Audit Log Creation
+    const actionType =
+      !prevUid && targetUser
+        ? "LEAD_ASSIGNED"
+        : prevUid && !targetUser
+        ? "LEAD_UNASSIGNED"
+        : "LEAD_REASSIGNED";
+
+    const description =
+      actionType === "LEAD_ASSIGNED"
+        ? `${actor.name} assigned lead ${lead.leadNumber} (${lead.customerName}) to ${targetUser?.name}.`
+        : actionType === "LEAD_UNASSIGNED"
+        ? `${actor.name} removed assignment from lead ${lead.leadNumber} (${lead.customerName}) (previously ${prevName}).`
+        : `${actor.name} reassigned lead ${lead.leadNumber} (${lead.customerName}) from ${prevName} to ${targetUser?.name}.`;
+
+    const audit: AuditLog = {
+      id: `audit-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+      entityType: "LEAD",
+      entityId: lead.id,
+      userId: actor.uid,
+      userName: actor.name,
+      userRole: actor.role || "ADMIN",
+      action: actionType,
+      actionCategory: "BUSINESS",
+      targetUserId: targetUser?.uid || null,
+      targetUserName: targetUser?.name || null,
+      field: "assignedToUid",
+      oldValue: prevUid,
+      newValue: targetUser?.uid || null,
+      description,
+      severity: "NORMAL",
+      createdAt: new Date().toISOString(),
+    };
+    data.auditLogs.unshift(audit);
+
+    saveDataFile(data);
+    return {
+      ...lead,
+      assignedSalesperson: targetUser,
+    };
   },
 
   updateLead(id: string, updates: Partial<Lead>, user?: User): Lead | undefined {
     const data = ensureDataFile();
     const index = data.leads.findIndex((l) => l.id === id);
     if (index === -1) return undefined;
+
+    // If assignedToUid is updated, route through assignLead
+    if (updates.assignedToUid !== undefined && user) {
+      this.assignLead(id, updates.assignedToUid, {
+        uid: user.uid,
+        name: user.name,
+        role: user.role || undefined,
+      });
+    }
 
     const current = data.leads[index];
     const updated: Lead = {
@@ -246,20 +444,27 @@ export const db = {
       this.createAuditLog({
         entityType: "LEAD",
         entityId: id,
-        userId: user?.id || "usr-super-admin",
-        userName: user?.name || "Sales Team",
-        userRole: user?.role || "SALES_EXECUTIVE",
+        userId: user?.uid || user?.id || "system",
+        userName: user?.name || "System",
+        userRole: user?.role || "ADMIN",
         action: "STAGE_CHANGE",
+        actionCategory: "BUSINESS",
         field: "currentStage",
         oldValue: current.currentStage,
         newValue: updates.currentStage,
-        description: `${user?.name || "Sales User"} updated lead stage to ${updates.currentStage}.`,
+        description: `Updated stage of ${current.leadNumber} from ${current.currentStage} to ${updates.currentStage}.`,
+        severity: "NORMAL",
       });
     }
 
     data.leads[index] = updated;
     saveDataFile(data);
-    return updated;
+    return {
+      ...updated,
+      assignedSalesperson: updated.assignedToUid
+        ? data.users.find((u) => u.uid === updated.assignedToUid || u.id === updated.assignedToUid) || undefined
+        : undefined,
+    };
   },
 
   convertLeadToCustomer(leadId: string, customOptions?: {
@@ -320,7 +525,7 @@ export const db = {
       salespersonId: customOptions?.salespersonId || lead.assignedSalespersonId || "usr-super-admin",
       projectManagerId: customOptions?.projectManagerId || "usr-super-admin",
       siteSupervisorId: "usr-super-admin",
-      currentStage: "BOOKING_CONFIRMED",
+      currentStage: "BOOKING",
       overallStatus: "ON_TRACK",
       priority: lead.priority === "HOT" || lead.priority === "HIGH" ? "HIGH" : "MEDIUM",
       estimatedProjectValue: projectValue,
@@ -444,7 +649,7 @@ export const db = {
       action: "PROJECT_CREATED",
       field: "currentStage",
       oldValue: "LEAD_CONVERTED",
-      newValue: "BOOKING_CONFIRMED",
+      newValue: "BOOKING",
       description: `Converted lead ${lead.leadNumber} to Customer ${customer.name} and initiated Solar Project ${project.projectNumber} (${systemSizeKw} kW).`,
     });
 
@@ -538,11 +743,14 @@ export const db = {
     projectManagerId?: string;
     district?: string;
     search?: string;
+    onlyDeleted?: boolean;
+    includeDeleted?: boolean;
   }): {
     projects: Project[];
     total: number;
     stageCounts: Record<string, number>;
     healthCounts: Record<string, number>;
+    deletedCount: number;
   } {
     const data = ensureDataFile();
 
@@ -555,8 +763,17 @@ export const db = {
         projectManagerId?: string;
         district?: string;
         search?: string;
+        onlyDeleted?: boolean;
+        includeDeleted?: boolean;
       }
     ) => {
+      // Soft deletion filtering
+      if (f?.onlyDeleted) {
+        if (p.deleted !== true) return false;
+      } else if (!f?.includeDeleted) {
+        if (p.deleted === true) return false;
+      }
+
       if (f?.stage && f.stage !== "ALL" && p.currentStage !== f.stage) return false;
       if (f?.status && f.status !== "ALL" && p.overallStatus !== f.status) return false;
       if (f?.salespersonId && f.salespersonId !== "ALL" && p.salespersonId !== f.salespersonId) return false;
@@ -575,7 +792,9 @@ export const db = {
           p.projectNumber.toLowerCase().includes(q) ||
           (cust && (cust.name.toLowerCase().includes(q) || cust.phone.includes(q) || cust.district.toLowerCase().includes(q))) ||
           (kseb && (kseb.consumerNumber?.toLowerCase().includes(q) || kseb.applicationNumber?.toLowerCase().includes(q))) ||
-          (loan && loan.applicationNumber?.toLowerCase().includes(q));
+          (loan && loan.applicationNumber?.toLowerCase().includes(q)) ||
+          (p.deletionReason && p.deletionReason.toLowerCase().includes(q)) ||
+          (p.duplicateOfProjectId && p.duplicateOfProjectId.toLowerCase().includes(q));
 
         if (!matches) return false;
       }
@@ -585,46 +804,38 @@ export const db = {
     const filtered = data.projects.filter((p) => matchFilters(p, filters));
 
     // Dynamic stage counts matching other active filters (status, district, search, etc.)
-    const allStageIds: ProjectStage[] = [
-      "BOOKING_CONFIRMED",
-      "DOCUMENTS",
-      "LOAN",
-      "KSEB_DOCUMENTATION",
-      "KSEB_APPLICATION",
-      "INSTALLATION",
-      "KSEB_INSPECTION",
-      "NET_METER",
-      "SUBSIDY",
-      "COMPLETED",
-    ];
+    const allStageIds: ProjectStage[] = PROJECT_STAGES_CONFIG.map((s) => s.id);
 
     const stageCounts: Record<string, number> = {
-      ALL: data.projects.filter((p) => matchFilters(p, { ...filters, stage: undefined })).length,
+      ALL: data.projects.filter((p) => matchFilters(p, { ...filters, stage: undefined, onlyDeleted: false })).length,
     };
 
     allStageIds.forEach((stageId) => {
       stageCounts[stageId] = data.projects.filter(
-        (p) => p.currentStage === stageId && matchFilters(p, { ...filters, stage: undefined })
+        (p) => p.currentStage === stageId && matchFilters(p, { ...filters, stage: undefined, onlyDeleted: false })
       ).length;
     });
 
     // Dynamic health counts matching other active filters (stage, district, search, etc.)
     const allHealthIds: ProjectHealth[] = ["ON_TRACK", "AT_RISK", "DELAYED", "ON_HOLD", "COMPLETED", "CANCELLED"];
     const healthCounts: Record<string, number> = {
-      ALL: data.projects.filter((p) => matchFilters(p, { ...filters, status: undefined })).length,
+      ALL: data.projects.filter((p) => matchFilters(p, { ...filters, status: undefined, onlyDeleted: false })).length,
     };
 
     allHealthIds.forEach((healthId) => {
       healthCounts[healthId] = data.projects.filter(
-        (p) => p.overallStatus === healthId && matchFilters(p, { ...filters, status: undefined })
+        (p) => p.overallStatus === healthId && matchFilters(p, { ...filters, status: undefined, onlyDeleted: false })
       ).length;
     });
+
+    const deletedCount = data.projects.filter((p) => p.deleted === true).length;
 
     return {
       projects: filtered.map((p) => this.populateProject(p, data)),
       total: filtered.length,
       stageCounts,
       healthCounts,
+      deletedCount,
     };
   },
 
@@ -637,42 +848,622 @@ export const db = {
   },
 
   populateProject(p: Project, data: DatabaseSchema): Project {
-    return {
+    // Auto-migrate legacy stages
+    let currentStageStr: string = p.currentStage as string;
+    if (currentStageStr === "BOOKING_CONFIRMED") currentStageStr = "BOOKING";
+    if (currentStageStr === "LOAN") currentStageStr = "LOAN_READYCASH";
+    if (currentStageStr === "KSEB_DOCS" || currentStageStr === "KSEB_DOCUMENTATION") currentStageStr = "KSEB_FEASIBILITY";
+    if (currentStageStr === "KSEB_APP" || currentStageStr === "KSEB_APPLICATION") currentStageStr = "KSEB_DCR_DOCS_SUBMITTED";
+    if (currentStageStr === "KSEB_INSPECTION") currentStageStr = "INSPECTION";
+    p.currentStage = currentStageStr as ProjectStage;
+
+    const loanDetail = data.loanDetails.find((l) => l.projectId === p.id) || null;
+    let duplicateOfProject: Project | null = null;
+    if (p.duplicateOfProjectId) {
+      const orig = data.projects.find((pr) => pr.id === p.duplicateOfProjectId || pr.projectNumber === p.duplicateOfProjectId);
+      if (orig) {
+        duplicateOfProject = {
+          ...orig,
+          customer: data.customers.find((c) => c.id === orig.customerId),
+        };
+      }
+    }
+
+    const populated: Project = {
       ...p,
       customer: data.customers.find((c) => c.id === p.customerId),
-      salesperson: data.users.find((u) => u.id === p.salespersonId),
-      projectManager: data.users.find((u) => u.id === p.projectManagerId),
-      siteSupervisor: data.users.find((u) => u.id === p.siteSupervisorId),
-      nextActionOwner: data.users.find((u) => u.id === p.nextActionOwnerId),
+      salesperson: data.users.find((u) => u.id === p.salespersonId || u.uid === p.salespersonId),
+      projectManager: data.users.find((u) => u.id === p.projectManagerId || u.uid === p.projectManagerId),
+      siteSupervisor: data.users.find((u) => u.id === p.siteSupervisorId || u.uid === p.siteSupervisorId),
+      nextActionOwner: data.users.find((u) => u.id === p.nextActionOwnerId || u.uid === p.nextActionOwnerId),
       documents: data.documents.filter((d) => d.projectId === p.id),
-      loanDetail: data.loanDetails.find((l) => l.projectId === p.id) || null,
+      loanDetail,
+      duplicateOfProject,
       ksebDetail: data.ksebDetails.find((k) => k.projectId === p.id) || null,
       installationDetail: data.installationDetails.find((i) => i.projectId === p.id) || null,
       subsidyDetail: data.subsidyDetails.find((s) => s.projectId === p.id) || null,
       tasks: data.tasks.filter((t) => t.projectId === p.id),
       followUps: data.followUps.filter((f) => f.projectId === p.id),
     };
+
+    // Apply Payment Milestone calculations
+    const projectValue = populated.estimatedProjectValue || populated.projectAmount || 300000;
+    let mode: PaymentMode = populated.paymentMode || "CASH";
+    if (!populated.paymentMode && loanDetail && (loanDetail.loanRequired || loanDetail.status === "APPROVED" || loanDetail.status === "DISBURSED")) {
+      const loanAmt = loanDetail.loanAmount || 0;
+      mode = loanAmt > 0 && loanAmt < projectValue ? "PARTIAL_LOAN" : "LOAN";
+    }
+
+    populated.paymentMode = mode;
+    populated.projectAmount = projectValue;
+
+    const sanctionedLoan = loanDetail?.loanAmount || populated.loanAmount || (mode === "LOAN" ? projectValue : mode === "PARTIAL_LOAN" ? Math.round(projectValue * 0.85) : 0);
+    populated.loanAmount = sanctionedLoan;
+
+    // AUTO-MIGRATION of legacy milestones or fresh initialization
+    if (!populated.paymentMilestones || populated.paymentMilestones.length === 0) {
+      if (mode === "CASH") {
+        const advance = Math.round(projectValue * 0.20);
+        const preInst = Math.round(projectValue * 0.30);
+        const inst = Math.round(projectValue * 0.35);
+        const finalPay = projectValue - (advance + preInst + inst);
+
+        populated.paymentMilestones = [
+          { id: `pm-1-${populated.id}`, type: "INITIAL_ADVANCE", label: "Initial Advance", amount: advance, status: "COLLECTED", collectedDate: populated.startDate, notes: "Collected at booking" },
+          { id: `pm-2-${populated.id}`, type: "PRE_INSTALLATION_PAYMENT", label: "Pre-Installation Payment", amount: preInst, status: "PENDING" },
+          { id: `pm-3-${populated.id}`, type: "INSTALLATION_PAYMENT", label: "Installation Payment", amount: inst, status: "PENDING" },
+          { id: `pm-4-${populated.id}`, type: "FINAL_PAYMENT", label: "Final Payment", amount: finalPay, status: "PENDING" },
+          { id: `pm-5-${populated.id}`, type: "FULLY_PAID", label: "Fully Paid", amount: 0, status: "PENDING" },
+        ];
+      } else if (mode === "LOAN") {
+        // 100% Bank Financed project
+        const loanAmtValue = sanctionedLoan || projectValue;
+        const initialLoanDisb = Math.round(loanAmtValue * 0.70);
+        const secondDisbursal = Math.max(0, loanAmtValue - initialLoanDisb);
+        const loanStatus = loanDetail?.status || populated.loanStatus || "APPLIED";
+        const isDisbursed = loanStatus === "DISBURSED";
+
+        populated.paymentMilestones = [
+          { id: `pm-1-${populated.id}`, type: "INITIAL_ADVANCE", label: "Initial Advance", amount: 0, status: "NOT_APPLICABLE" },
+          { id: `pm-2-${populated.id}`, type: "LOAN_APPLIED", label: "Loan Applied", amount: loanAmtValue, status: loanStatus === "NOT_APPLIED" ? "PENDING" : "COLLECTED", collectedDate: loanDetail?.applicationDate },
+          { id: `pm-3-${populated.id}`, type: "LOAN_APPROVED", label: "Loan Approved", amount: loanAmtValue, status: (loanStatus === "APPROVED" || isDisbursed) ? "COLLECTED" : "PENDING" },
+          { id: `pm-4-${populated.id}`, type: "FIRST_LOAN_DISBURSAL", label: "First Loan Disbursal", amount: initialLoanDisb, status: isDisbursed ? "COLLECTED" : "PENDING" },
+          { id: `pm-5-${populated.id}`, type: "SECOND_LOAN_DISBURSAL", label: "Second Loan Disbursal", amount: secondDisbursal, status: "PENDING" },
+          { id: `pm-6-${populated.id}`, type: "FULLY_PAID", label: "Fully Paid", amount: 0, status: "PENDING" },
+        ];
+      } else {
+        // PARTIAL_LOAN (Bank + Customer)
+        const custAdvance = Math.max(0, projectValue - (sanctionedLoan || Math.round(projectValue * 0.85)));
+        const loanAmtValue = sanctionedLoan || (projectValue - custAdvance);
+        const firstDisbursal = Math.round(loanAmtValue * 0.75);
+        const secondDisbursal = Math.max(0, loanAmtValue - firstDisbursal);
+        const loanStatus = loanDetail?.status || populated.loanStatus || "APPLIED";
+        const isDisbursed = loanStatus === "DISBURSED";
+
+        populated.paymentMilestones = [
+          { id: `pm-1-${populated.id}`, type: "INITIAL_ADVANCE", label: "Initial Advance", amount: custAdvance || Math.round(projectValue * 0.15), status: "COLLECTED", collectedDate: populated.startDate },
+          { id: `pm-2-${populated.id}`, type: "LOAN_APPLIED", label: "Loan Applied", amount: loanAmtValue, status: loanStatus === "NOT_APPLIED" ? "PENDING" : "COLLECTED" },
+          { id: `pm-3-${populated.id}`, type: "LOAN_APPROVED", label: "Loan Approved", amount: loanAmtValue, status: (loanStatus === "APPROVED" || isDisbursed) ? "COLLECTED" : "PENDING" },
+          { id: `pm-4-${populated.id}`, type: "FIRST_LOAN_DISBURSAL", label: "First Loan Disbursal", amount: firstDisbursal, status: isDisbursed ? "COLLECTED" : "PENDING" },
+          { id: `pm-5-${populated.id}`, type: "SECOND_LOAN_DISBURSAL", label: "Second Loan Disbursal", amount: secondDisbursal, status: "PENDING" },
+          { id: `pm-6-${populated.id}`, type: "FULLY_PAID", label: "Fully Paid", amount: 0, status: "PENDING" },
+        ];
+      }
+    } else {
+      // Auto-migrate legacy milestone types for LOAN / PARTIAL_LOAN projects
+      if (mode === "LOAN" || mode === "PARTIAL_LOAN") {
+        const hasLegacy = populated.paymentMilestones.some(
+          (m: any) =>
+            m.type === "LOAN_DISBURSED" ||
+            m.type === "FINAL_LOAN_INSTALLMENT" ||
+            m.type === "CUSTOMER_BALANCE" ||
+            m.type === "FIRST_LOAN_PAYMENT" ||
+            m.type === "REMAINING_CUSTOMER_BALANCE"
+        );
+
+        if (hasLegacy) {
+          const oldFirstDisb = populated.paymentMilestones.find(
+            (m: any) => m.type === "LOAN_DISBURSED" || m.type === "FIRST_LOAN_PAYMENT"
+          );
+          const oldSecondDisb = populated.paymentMilestones.find(
+            (m: any) => m.type === "FINAL_LOAN_INSTALLMENT" || m.type === "CUSTOMER_BALANCE"
+          );
+          const oldAdvance = populated.paymentMilestones.find((m: any) => m.type === "INITIAL_ADVANCE");
+          const oldApplied = populated.paymentMilestones.find((m: any) => m.type === "LOAN_APPLIED");
+          const oldApproved = populated.paymentMilestones.find((m: any) => m.type === "LOAN_APPROVED");
+
+          const firstAmount = oldFirstDisb?.amount || Math.round(sanctionedLoan * 0.75);
+          const secondAmount = oldSecondDisb?.amount || Math.max(0, sanctionedLoan - firstAmount);
+
+          populated.paymentMilestones = [
+            {
+              id: oldAdvance?.id || `pm-1-${populated.id}`,
+              type: "INITIAL_ADVANCE",
+              label: "Initial Advance",
+              amount: mode === "LOAN" ? 0 : (oldAdvance?.amount ?? Math.max(0, projectValue - sanctionedLoan)),
+              status: mode === "LOAN" ? "NOT_APPLICABLE" : (oldAdvance?.status || "COLLECTED"),
+              collectedDate: oldAdvance?.collectedDate || populated.startDate,
+              notes: oldAdvance?.notes,
+            },
+            {
+              id: oldApplied?.id || `pm-2-${populated.id}`,
+              type: "LOAN_APPLIED",
+              label: "Loan Applied",
+              amount: sanctionedLoan,
+              status: oldApplied?.status || "COLLECTED",
+              collectedDate: oldApplied?.collectedDate,
+              notes: oldApplied?.notes,
+            },
+            {
+              id: oldApproved?.id || `pm-3-${populated.id}`,
+              type: "LOAN_APPROVED",
+              label: "Loan Approved",
+              amount: sanctionedLoan,
+              status: oldApproved?.status || "COLLECTED",
+              collectedDate: oldApproved?.collectedDate,
+              notes: oldApproved?.notes,
+            },
+            {
+              id: oldFirstDisb?.id || `pm-4-${populated.id}`,
+              type: "FIRST_LOAN_DISBURSAL",
+              label: "First Loan Disbursal",
+              amount: firstAmount,
+              status: oldFirstDisb?.status || "COLLECTED",
+              collectedDate: oldFirstDisb?.collectedDate,
+              notes: oldFirstDisb?.notes,
+            },
+            {
+              id: oldSecondDisb?.id || `pm-5-${populated.id}`,
+              type: "SECOND_LOAN_DISBURSAL",
+              label: "Second Loan Disbursal",
+              amount: secondAmount,
+              status: (oldSecondDisb?.status === "COLLECTED" && oldSecondDisb?.collectedDate) ? "COLLECTED" : "PENDING",
+              collectedDate: oldSecondDisb?.collectedDate,
+              notes: oldSecondDisb?.notes,
+            },
+            {
+              id: `pm-6-${populated.id}`,
+              type: "FULLY_PAID",
+              label: "Fully Paid",
+              amount: 0,
+              status: "PENDING",
+            },
+          ];
+        }
+      }
+    }
+
+    // Two-stage disbursals tracking & calculations
+    const firstDisbursalMs = populated.paymentMilestones.find((m) => m.type === "FIRST_LOAN_DISBURSAL");
+    const secondDisbursalMs = populated.paymentMilestones.find((m) => m.type === "SECOND_LOAN_DISBURSAL");
+
+    const firstAmount = firstDisbursalMs?.amount || 0;
+    const firstStatus = firstDisbursalMs?.status || "PENDING";
+    const secondAmount = secondDisbursalMs?.amount || 0;
+    const secondStatus = secondDisbursalMs?.status || "PENDING";
+
+    const firstDisbursed = firstStatus === "COLLECTED" ? firstAmount : 0;
+    const secondDisbursed = secondStatus === "COLLECTED" ? secondAmount : 0;
+    const totalDisbursed = firstDisbursed + secondDisbursed;
+    const remainingToDisburse = Math.max(0, sanctionedLoan - totalDisbursed);
+
+    populated.firstLoanDisbursalAmount = firstAmount;
+    populated.firstLoanDisbursalStatus = firstStatus;
+    populated.firstLoanDisbursalDate = firstDisbursalMs?.collectedDate || null;
+    populated.firstLoanDisbursalNotes = firstDisbursalMs?.notes || null;
+
+    populated.secondLoanDisbursalAmount = secondAmount;
+    populated.secondLoanDisbursalStatus = secondStatus;
+    populated.secondLoanDisbursalDate = secondDisbursalMs?.collectedDate || null;
+    populated.secondLoanDisbursalNotes = secondDisbursalMs?.notes || null;
+
+    populated.loanDisbursedAmount = totalDisbursed;
+    populated.remainingLoanToDisburse = remainingToDisburse;
+
+    // Customer payments (excluding bank loan application/approval and disbursals)
+    const customerCollected = populated.paymentMilestones
+      .filter((m) => m.status === "COLLECTED" && (m.type === "INITIAL_ADVANCE" || m.type === "PRE_INSTALLATION_PAYMENT" || m.type === "INSTALLATION_PAYMENT" || m.type === "FINAL_PAYMENT"))
+      .reduce((sum, m) => sum + (m.amount || 0), 0);
+
+    populated.customerContribution = customerCollected;
+
+    const totalCollected = customerCollected + totalDisbursed;
+    const outstanding = Math.max(0, projectValue - totalCollected);
+    populated.outstandingAmount = outstanding;
+
+    const isFullyDisbursed = (mode !== "CASH") && (secondStatus === "COLLECTED" || (firstStatus === "COLLECTED" && secondAmount === 0));
+    if (isFullyDisbursed) {
+      populated.loanStatus = "DISBURSED";
+    }
+
+    // Sync loanDetail fields
+    if (loanDetail) {
+      loanDetail.firstDisbursal = {
+        amount: firstAmount,
+        status: firstStatus,
+        disbursalDate: firstDisbursalMs?.collectedDate || null,
+        notes: firstDisbursalMs?.notes || null,
+      };
+      loanDetail.secondDisbursal = {
+        amount: secondAmount,
+        status: secondStatus,
+        disbursalDate: secondDisbursalMs?.collectedDate || null,
+        notes: secondDisbursalMs?.notes || null,
+      };
+    }
+
+    // Determine next payment milestone & fully paid status
+    const fullyPaidMs = populated.paymentMilestones.find((m) => m.type === "FULLY_PAID");
+    const nextPending = populated.paymentMilestones.find((m) => (m.status === "PENDING" || m.status === "DUE") && m.type !== "LOAN_APPLIED" && m.type !== "LOAN_APPROVED" && m.type !== "FULLY_PAID");
+
+    if (outstanding <= 0 && (!nextPending || nextPending.type === "FULLY_PAID")) {
+      populated.nextPaymentMilestone = "Fully Paid";
+      if (fullyPaidMs) fullyPaidMs.status = "COLLECTED";
+    } else {
+      populated.nextPaymentMilestone = nextPending ? nextPending.label : "Fully Paid";
+      if (fullyPaidMs && fullyPaidMs.status === "COLLECTED") fullyPaidMs.status = "PENDING";
+    }
+
+    // Populate strict sequential completedStages and stageHistory using reconcileProjectStages
+    const stageReconciliation = reconcileProjectStages(p, data.auditLogs);
+    populated.completedStages = stageReconciliation.completedStages;
+    populated.stageMigrationStatus = stageReconciliation.stageMigrationStatus;
+    populated.stageMigrationNotes = stageReconciliation.stageMigrationNotes;
+
+    if (p.stageHistory && Array.isArray(p.stageHistory) && p.stageHistory.length > 0) {
+      populated.stageHistory = p.stageHistory;
+    } else {
+      // Reconstruct stage history from audit logs where available
+      const stageAuditLogs = data.auditLogs.filter(
+        (a) =>
+          a.entityId === p.id &&
+          (a.action === "STAGE_CHANGE" || a.action === "STAGE_COMPLETED" || a.action === "STAGE_TRANSITION")
+      );
+      if (stageAuditLogs.length > 0) {
+        populated.stageHistory = stageAuditLogs.map((log) => ({
+          stage: normalizeStageId(log.oldValue || log.newValue || "BOOKING"),
+          completedAt: log.createdAt,
+          completedBy: log.userId,
+          completedByName: log.userName,
+          completionNotes: log.description,
+        }));
+      } else {
+        // Map from verified completed stages with null legacy timestamps (no fabricated data)
+        populated.stageHistory = populated.completedStages.map((st) => ({
+          stage: st,
+          completedAt: null,
+          completedBy: null,
+          completedByName: null,
+          completionNotes: "Historical progress recorded prior to strict stage gating",
+          isReconciled: true,
+        }));
+      }
+    }
+
+    return populated;
   },
 
-  updateProjectStage(
+  updateProjectPaymentMilestone(
     projectId: string,
-    newStage: ProjectStage,
-    user: User,
-    comment?: string
+    milestoneId: string,
+    updates: Partial<PaymentMilestone>,
+    user?: User
   ): Project | undefined {
     const data = ensureDataFile();
     const idx = data.projects.findIndex((p) => p.id === projectId);
     if (idx === -1) return undefined;
 
-    const current = data.projects[idx];
-    const oldStage = current.currentStage;
-    current.currentStage = newStage;
-    current.updatedAt = new Date().toISOString();
+    let project = this.populateProject(data.projects[idx], data);
+    if (!project.paymentMilestones) return undefined;
 
-    if (newStage === "COMPLETED") {
-      current.actualCompletionDate = new Date().toISOString();
-      current.overallStatus = "COMPLETED";
+    const msIdx = project.paymentMilestones.findIndex((m) => m.id === milestoneId);
+    if (msIdx === -1) return undefined;
+
+    const prevMilestone = { ...project.paymentMilestones[msIdx] };
+    const updatedMilestone: PaymentMilestone = {
+      ...prevMilestone,
+      ...updates,
+    };
+
+    if (updates.status === "COLLECTED" && prevMilestone.status !== "COLLECTED" && !updatedMilestone.collectedDate) {
+      updatedMilestone.collectedDate = new Date().toISOString();
     }
+
+    project.paymentMilestones[msIdx] = updatedMilestone;
+
+    // Sync loan status if first or second disbursal changed
+    if (updatedMilestone.type === "FIRST_LOAN_DISBURSAL" && updatedMilestone.status === "COLLECTED") {
+      const loanDetail = data.loanDetails.find((l) => l.projectId === projectId);
+      if (loanDetail) {
+        loanDetail.updatedAt = new Date().toISOString();
+      }
+    }
+    if (updatedMilestone.type === "SECOND_LOAN_DISBURSAL" && updatedMilestone.status === "COLLECTED") {
+      project.loanStatus = "DISBURSED";
+      const loanDetail = data.loanDetails.find((l) => l.projectId === projectId);
+      if (loanDetail) {
+        loanDetail.status = "DISBURSED";
+        loanDetail.updatedAt = new Date().toISOString();
+      }
+    }
+
+    project.lastPaymentUpdatedAt = new Date().toISOString();
+
+    // Recalculate summary
+    project = this.populateProject(project, data);
+
+    let auditAction = "PAYMENT_STATUS_CHANGED";
+    if (updatedMilestone.type === "FIRST_LOAN_DISBURSAL" && updatedMilestone.status === "COLLECTED") {
+      auditAction = "FIRST_LOAN_DISBURSAL_COLLECTED";
+    } else if (updatedMilestone.type === "SECOND_LOAN_DISBURSAL" && updatedMilestone.status === "COLLECTED") {
+      auditAction = "SECOND_LOAN_DISBURSAL_COLLECTED";
+    }
+
+    let auditDescription = `Updated payment milestone "${updatedMilestone.label}" status from ${prevMilestone.status} to ${updatedMilestone.status} (₹${(updatedMilestone.amount || 0).toLocaleString("en-IN")}) on ${project.projectNumber}.`;
+    if (auditAction === "FIRST_LOAN_DISBURSAL_COLLECTED") {
+      auditDescription = `First Loan Disbursal of ₹${(updatedMilestone.amount || 0).toLocaleString("en-IN")} collected from bank for project ${project.projectNumber} by ${user?.name || "System"}.`;
+    } else if (auditAction === "SECOND_LOAN_DISBURSAL_COLLECTED") {
+      auditDescription = `Second Loan Disbursal of ₹${(updatedMilestone.amount || 0).toLocaleString("en-IN")} collected from bank for project ${project.projectNumber} by ${user?.name || "System"}.`;
+    }
+
+    // Audit Log
+    this.createAuditLog({
+      entityType: "PROJECT",
+      entityId: projectId,
+      userId: user?.uid || user?.id || "system",
+      userName: user?.name || "System",
+      userRole: user?.role || "ADMIN",
+      action: auditAction,
+      actionCategory: "BUSINESS",
+      field: updatedMilestone.type,
+      oldValue: prevMilestone.status,
+      newValue: updatedMilestone.status,
+      description: auditDescription,
+      severity: "NORMAL",
+    });
+
+    data.projects[idx] = project;
+    saveDataFile(data);
+    return project;
+  },
+
+  updateProjectPaymentMode(
+    projectId: string,
+    paymentMode: PaymentMode,
+    user?: User
+  ): Project | undefined {
+    const data = ensureDataFile();
+    const idx = data.projects.findIndex((p) => p.id === projectId);
+    if (idx === -1) return undefined;
+
+    const project = data.projects[idx];
+    const oldMode = project.paymentMode || "CASH";
+    project.paymentMode = paymentMode;
+    project.paymentMilestones = []; // Force milestone re-initialization for new mode
+    project.lastPaymentUpdatedAt = new Date().toISOString();
+
+    this.createAuditLog({
+      entityType: "PROJECT",
+      entityId: projectId,
+      userId: user?.uid || user?.id || "system",
+      userName: user?.name || "System",
+      userRole: user?.role || "ADMIN",
+      action: "PAYMENT_MODE_CHANGED",
+      actionCategory: "BUSINESS",
+      field: "paymentMode",
+      oldValue: oldMode,
+      newValue: paymentMode,
+      description: `Changed project payment mode from ${oldMode} to ${paymentMode} on ${project.projectNumber}.`,
+      severity: "NORMAL",
+    });
+
+    data.projects[idx] = project;
+    saveDataFile(data);
+    return this.populateProject(project, data);
+  },
+
+  updateProjectStage(
+    projectId: string,
+    requestedNextStage: ProjectStage | undefined,
+    user: User,
+    comment?: string,
+    confirmations?: Record<string, boolean>
+  ): { success: boolean; project?: Project; error?: string; missingRequirements?: string[] } {
+    const data = ensureDataFile();
+    const idx = data.projects.findIndex((p) => p.id === projectId);
+    if (idx === -1) return { success: false, error: "Project not found" };
+
+    const rawProject = data.projects[idx];
+    const populated = this.populateProject(rawProject, data);
+    const currentStage = normalizeStageId(populated.currentStage);
+
+    // Apply any inline confirmations if provided
+    if (confirmations) {
+      if (
+        confirmations.panelsDelivered !== undefined ||
+        confirmations.inverterDelivered !== undefined ||
+        confirmations.structureDelivered !== undefined ||
+        confirmations.installationCompleted !== undefined
+      ) {
+        let instIdx = data.installationDetails.findIndex((i) => i.projectId === projectId);
+        if (instIdx === -1) {
+          const newInst: InstallationDetail = {
+            id: `inst-${Date.now()}`,
+            projectId,
+            status: "IN_PROGRESS",
+            checklist: [],
+            photos: [],
+            updatedAt: new Date().toISOString(),
+          };
+          data.installationDetails.push(newInst);
+          instIdx = data.installationDetails.length - 1;
+        }
+
+        if (confirmations.panelsDelivered !== undefined) data.installationDetails[instIdx].panelsDelivered = confirmations.panelsDelivered;
+        if (confirmations.inverterDelivered !== undefined) data.installationDetails[instIdx].inverterDelivered = confirmations.inverterDelivered;
+        if (confirmations.structureDelivered !== undefined) data.installationDetails[instIdx].structureDelivered = confirmations.structureDelivered;
+        if (confirmations.installationCompleted !== undefined) {
+          data.installationDetails[instIdx].installationCompleted = confirmations.installationCompleted;
+          if (confirmations.installationCompleted) {
+            data.installationDetails[instIdx].status = "COMPLETED";
+            data.installationDetails[instIdx].completionDate = new Date().toISOString();
+          }
+        }
+        data.installationDetails[instIdx].updatedAt = new Date().toISOString();
+      }
+
+      if (
+        confirmations.dcrSubmitted !== undefined ||
+        confirmations.inspectionCompleted !== undefined ||
+        confirmations.netMeterInstalled !== undefined
+      ) {
+        let ksebIdx = data.ksebDetails.findIndex((k) => k.projectId === projectId);
+        if (ksebIdx === -1) {
+          const newKseb: KsebDetail = {
+            id: `kseb-${Date.now()}`,
+            projectId,
+            status: "FEASIBILITY",
+            updatedAt: new Date().toISOString(),
+          };
+          data.ksebDetails.push(newKseb);
+          ksebIdx = data.ksebDetails.length - 1;
+        }
+
+        if (confirmations.dcrSubmitted !== undefined) {
+          data.ksebDetails[ksebIdx].dcrSubmitted = confirmations.dcrSubmitted;
+          if (confirmations.dcrSubmitted) data.ksebDetails[ksebIdx].status = "INSPECTION";
+        }
+        if (confirmations.inspectionCompleted !== undefined) {
+          data.ksebDetails[ksebIdx].inspectionCompleted = confirmations.inspectionCompleted;
+          if (confirmations.inspectionCompleted) {
+            data.ksebDetails[ksebIdx].inspectionStatus = "PASSED";
+            data.ksebDetails[ksebIdx].status = "APPROVED";
+          }
+        }
+        if (confirmations.netMeterInstalled !== undefined) {
+          data.ksebDetails[ksebIdx].netMeterInstalled = confirmations.netMeterInstalled;
+          if (confirmations.netMeterInstalled) {
+            data.ksebDetails[ksebIdx].netMeterStatus = "INSTALLED";
+            data.ksebDetails[ksebIdx].netMeterInstalledDate = new Date().toISOString();
+            data.ksebDetails[ksebIdx].status = "NET_METER_INSTALLED";
+          }
+        }
+        data.ksebDetails[ksebIdx].updatedAt = new Date().toISOString();
+      }
+
+      if (confirmations.claimed !== undefined) {
+        let subIdx = data.subsidyDetails.findIndex((s) => s.projectId === projectId);
+        if (subIdx === -1) {
+          const newSub: SubsidyDetail = {
+            id: `sub-${Date.now()}`,
+            projectId,
+            subsidyApplicable: true,
+            status: "APPLICATION",
+            updatedAt: new Date().toISOString(),
+          };
+          data.subsidyDetails.push(newSub);
+          subIdx = data.subsidyDetails.length - 1;
+        }
+
+        data.subsidyDetails[subIdx].claimed = confirmations.claimed;
+        data.subsidyDetails[subIdx].subsidySubmitted = confirmations.claimed;
+        if (confirmations.claimed) data.subsidyDetails[subIdx].status = "CREDITED";
+        data.subsidyDetails[subIdx].updatedAt = new Date().toISOString();
+      }
+    }
+
+    // Re-populate with updated sub-objects
+    const refreshedProject = this.populateProject(data.projects[idx], data);
+
+    // Validate completion requirements of the current stage
+    const validation = canCompleteStage(refreshedProject, currentStage);
+    if (!validation.allowed) {
+      return {
+        success: false,
+        error: `Cannot complete stage "${currentStage}". Required criteria missing.`,
+        missingRequirements: validation.missingRequirements,
+      };
+    }
+
+    const expectedNextStage = NEXT_STAGE_MAP[currentStage];
+    if (!expectedNextStage && currentStage === "COMPLETED") {
+      return { success: false, error: "Project is already in COMPLETED stage." };
+    }
+
+    // If requestedNextStage is passed, verify it matches strictly expectedNextStage
+    if (requestedNextStage && expectedNextStage && normalizeStageId(requestedNextStage) !== normalizeStageId(expectedNextStage)) {
+      return {
+        success: false,
+        error: `Invalid stage transition. Current stage is "${currentStage}", only next sequential stage "${expectedNextStage}" is permitted.`,
+      };
+    }
+
+    const nextStage = expectedNextStage || "COMPLETED";
+
+    // Atomically update project state
+    const currentCompleted = Array.isArray(rawProject.completedStages)
+      ? rawProject.completedStages
+      : [];
+    const updatedCompletedStages = Array.from(new Set([...currentCompleted, currentStage]));
+
+    const currentHistory = Array.isArray(rawProject.stageHistory)
+      ? rawProject.stageHistory
+      : [];
+    const historyEntry: StageHistoryEntry = {
+      stage: currentStage,
+      completedAt: new Date().toISOString(),
+      completedBy: user.id,
+      completedByName: user.name,
+      completionNotes: comment || null,
+    };
+    const updatedHistory = [...currentHistory, historyEntry];
+
+    rawProject.completedStages = updatedCompletedStages;
+    rawProject.stageHistory = updatedHistory;
+    rawProject.currentStage = nextStage;
+    rawProject.updatedAt = new Date().toISOString();
+    rawProject.stageMigrationRequired = false;
+
+    if (nextStage === "COMPLETED") {
+      rawProject.actualCompletionDate = new Date().toISOString();
+      rawProject.overallStatus = "COMPLETED";
+      rawProject.nextActionTitle = "Handover plant & issue commissioning certificate";
+      rawProject.nextActionStatus = "COMPLETED";
+    } else {
+      const defaultNextActions: Record<string, string> = {
+        BOOKING: "Verify booking deposit & collect customer documents",
+        DOCUMENTS: "Complete document collection & KYC verification",
+        LOAN_READYCASH: "Process bank loan application / verify ReadyCash self-funding",
+        KSEB_FEASIBILITY: "Complete KSEB Soura portal feasibility application",
+        EQUIPMENT_DELIVERED: "Deliver solar panels, inverter & BoP material",
+        STRUCTURE_MATERIAL_DELIVERED: "Deliver mounting structure & hardware to site",
+        INSTALLATION: "Complete physical solar PV array mounting & wiring",
+        KSEB_DCR_DOCS_SUBMITTED: "Submit KSEB DCR compliance documentation",
+        INSPECTION: "Coordinate KSEB electrical inspector site verification",
+        NET_METER: "Coordinate bi-directional solar net meter installation",
+        SUBSIDY: "Process PM Surya Ghar national portal subsidy claim",
+      };
+      if (defaultNextActions[nextStage]) {
+        rawProject.nextActionTitle = defaultNextActions[nextStage];
+        rawProject.nextActionDueDate = new Date(Date.now() + 3 * 86400000).toISOString();
+        rawProject.nextActionStatus = "PENDING";
+      }
+    }
+
+    // Record Audit Logs
+    this.createAuditLog({
+      entityType: "PROJECT",
+      entityId: projectId,
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      action: "STAGE_COMPLETED",
+      field: "completedStages",
+      oldValue: currentStage,
+      newValue: nextStage,
+      description: `${user.name} completed stage "${currentStage}" for project ${rawProject.projectNumber}.${comment ? ` Notes: ${comment}` : ""}`,
+      severity: "NORMAL",
+    });
 
     this.createAuditLog({
       entityType: "PROJECT",
@@ -680,15 +1471,236 @@ export const db = {
       userId: user.id,
       userName: user.name,
       userRole: user.role,
-      action: "STAGE_CHANGE",
+      action: "STAGE_TRANSITION",
       field: "currentStage",
-      oldValue: oldStage,
-      newValue: newStage,
-      description: `${user.name} changed project stage from ${oldStage} to ${newStage}.${comment ? ` Note: ${comment}` : ""}`,
+      oldValue: currentStage,
+      newValue: nextStage,
+      description: `Project ${rawProject.projectNumber} automatically advanced to "${nextStage}".`,
+      severity: "NORMAL",
     });
 
+    data.projects[idx] = rawProject;
     saveDataFile(data);
-    return this.populateProject(current, data);
+    return { success: true, project: this.populateProject(rawProject, data) };
+  },
+
+  overrideProjectStage(
+    projectId: string,
+    targetStage: ProjectStage,
+    user: User,
+    reason: string
+  ): { success: boolean; project?: Project; error?: string } {
+    if (user.role !== "SUPER_ADMIN" && user.email !== "vertxenergies@gmail.com") {
+      return { success: false, error: "Only Super Admin is authorized to execute manual stage overrides." };
+    }
+
+    if (!reason || reason.trim().length < 5) {
+      return { success: false, error: "A mandatory, detailed reason (minimum 5 characters) is required for stage override." };
+    }
+
+    const data = ensureDataFile();
+    const idx = data.projects.findIndex((p) => p.id === projectId);
+    if (idx === -1) return { success: false, error: "Project not found" };
+
+    const rawProject = data.projects[idx];
+    const oldStage = rawProject.currentStage;
+    const normTarget = normalizeStageId(targetStage);
+
+    rawProject.currentStage = normTarget;
+    rawProject.updatedAt = new Date().toISOString();
+    rawProject.stageMigrationRequired = false;
+
+    // Log SUPER_ADMIN_STAGE_OVERRIDE
+    this.createAuditLog({
+      entityType: "PROJECT",
+      entityId: projectId,
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      action: "SUPER_ADMIN_STAGE_OVERRIDE",
+      actionCategory: "OVERRIDE",
+      field: "currentStage",
+      oldValue: oldStage,
+      newValue: normTarget,
+      description: `[SUPER ADMIN OVERRIDE] ${user.name} manually overrode project stage from "${oldStage}" to "${normTarget}". Reason: ${reason.trim()}`,
+      severity: "WARNING",
+      isOverride: true,
+    });
+
+    data.projects[idx] = rawProject;
+    saveDataFile(data);
+    return { success: true, project: this.populateProject(rawProject, data) };
+  },
+
+  reconcileProjectStageHistory(
+    projectId: string,
+    confirmedStages: ProjectStage[],
+    user: User,
+    reason: string
+  ): { success: boolean; project?: Project; error?: string } {
+    if (user.role !== "SUPER_ADMIN" && user.email !== "vertxenergies@gmail.com") {
+      return { success: false, error: "Only Super Admin is authorized to execute stage history reconciliation." };
+    }
+
+    if (!reason || reason.trim().length < 5) {
+      return { success: false, error: "A mandatory reconciliation reason (minimum 5 characters) is required." };
+    }
+
+    const validation = validateCompletedStages(confirmedStages);
+    if (!validation.valid) {
+      return { success: false, error: validation.error || "Selected completed stages must be contiguous starting from Booking." };
+    }
+
+    const data = ensureDataFile();
+    const idx = data.projects.findIndex((p) => p.id === projectId || p.projectNumber === projectId);
+    if (idx === -1) return { success: false, error: "Project not found" };
+
+    const rawProject = data.projects[idx];
+    const prevCurrentStage = rawProject.currentStage;
+    const prevCompletedStages = rawProject.completedStages || [];
+
+    const normConfirmed = confirmedStages.map(normalizeStageId);
+    const confirmedCount = normConfirmed.length;
+    const newCurrentStage: ProjectStage =
+      confirmedCount >= 12
+        ? "COMPLETED"
+        : CANONICAL_PROJECT_STAGES[confirmedCount];
+
+    rawProject.completedStages = normConfirmed;
+    rawProject.currentStage = newCurrentStage;
+    rawProject.stageMigrationStatus = "VERIFIED";
+    rawProject.stageMigrationNotes = null;
+    rawProject.stageMigrationRequired = false;
+    rawProject.updatedAt = new Date().toISOString();
+
+    // Reconstruct stage history
+    rawProject.stageHistory = normConfirmed.map((st) => ({
+      stage: st,
+      completedAt: null,
+      completedBy: user.id,
+      completedByName: user.name,
+      completionNotes: `Reconciled by Super Admin: ${reason.trim()}`,
+      isReconciled: true,
+    }));
+
+    // Create STAGE_HISTORY_RECONCILED audit log
+    this.createAuditLog({
+      entityType: "PROJECT",
+      entityId: rawProject.id,
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      action: "STAGE_HISTORY_RECONCILED",
+      actionCategory: "ADMIN_MANAGEMENT",
+      field: "completedStages",
+      oldValue: `${prevCurrentStage} (${prevCompletedStages.length} stages)`,
+      newValue: `${newCurrentStage} (${normConfirmed.length} stages)`,
+      description: `Super Admin reconciled project stage history for ${rawProject.projectNumber}. Reason: ${reason.trim()}`,
+      severity: "WARNING",
+      isOverride: true,
+    });
+
+    data.projects[idx] = rawProject;
+    saveDataFile(data);
+    return { success: true, project: this.populateProject(rawProject, data) };
+  },
+
+  getProjectsNeedingReconciliation(): Project[] {
+    const data = ensureDataFile();
+    return data.projects
+      .filter((p) => !p.deleted && (p.stageMigrationStatus === "NEEDS_REVIEW" || p.stageMigrationRequired))
+      .map((p) => this.populateProject(p, data));
+  },
+
+  deleteProject(
+    projectId: string,
+    params: {
+      reason: ProjectDeletionReason;
+      details?: string;
+      duplicateOfProjectId?: string;
+    },
+    user: User
+  ): Project | undefined {
+    const data = ensureDataFile();
+    const idx = data.projects.findIndex((p) => p.id === projectId || p.projectNumber === projectId);
+    if (idx === -1) return undefined;
+
+    const project = data.projects[idx];
+    const cust = data.customers.find((c) => c.id === project.customerId);
+
+    let duplicateOfProjectNumber = params.duplicateOfProjectId || null;
+    if (params.duplicateOfProjectId) {
+      const targetProj = data.projects.find((p) => p.id === params.duplicateOfProjectId || p.projectNumber === params.duplicateOfProjectId);
+      if (targetProj) {
+        duplicateOfProjectNumber = targetProj.projectNumber;
+        params.duplicateOfProjectId = targetProj.id;
+      }
+    }
+
+    project.deleted = true;
+    project.deletedAt = new Date().toISOString();
+    project.deletedByUid = user.uid || user.id;
+    project.deletedByName = user.name;
+    project.deletionReason = params.reason;
+    project.deletionReasonDetails = params.details || null;
+    project.duplicateOfProjectId = params.duplicateOfProjectId || null;
+    project.updatedAt = new Date().toISOString();
+
+    // Create immutable audit event
+    this.createAuditLog({
+      entityType: "PROJECT",
+      entityId: project.id,
+      userId: user.uid || user.id,
+      userName: user.name,
+      userRole: user.role,
+      action: "PROJECT_DELETED",
+      actionCategory: "BUSINESS",
+      field: "deleted",
+      oldValue: "false",
+      newValue: "true",
+      description: `Project ${project.projectNumber} (${cust?.name || "Customer"}) removed from active workflow by ${user.name}. Reason: ${params.reason}${params.duplicateOfProjectId ? ` (Duplicate of ${duplicateOfProjectNumber || params.duplicateOfProjectId})` : ""}${params.details ? ` - Details: ${params.details}` : ""}`,
+      severity: "WARNING",
+    });
+
+    data.projects[idx] = project;
+    saveDataFile(data);
+    return this.populateProject(project, data);
+  },
+
+  restoreProject(projectId: string, user: User): Project | undefined {
+    const data = ensureDataFile();
+    const idx = data.projects.findIndex((p) => p.id === projectId || p.projectNumber === projectId);
+    if (idx === -1) return undefined;
+
+    const project = data.projects[idx];
+    const prevReason = project.deletionReason;
+    const cust = data.customers.find((c) => c.id === project.customerId);
+
+    project.deleted = false;
+    project.deletedAt = null;
+    project.deletedByUid = null;
+    project.deletedByName = null;
+    project.updatedAt = new Date().toISOString();
+
+    // Create immutable audit event
+    this.createAuditLog({
+      entityType: "PROJECT",
+      entityId: project.id,
+      userId: user.uid || user.id,
+      userName: user.name,
+      userRole: user.role,
+      action: "PROJECT_RESTORED",
+      actionCategory: "BUSINESS",
+      field: "deleted",
+      oldValue: "true",
+      newValue: "false",
+      description: `Project ${project.projectNumber} (${cust?.name || "Customer"}) restored to active project pipeline by ${user.name}. Previous deletion reason: ${prevReason || "None"}.`,
+      severity: "WARNING",
+    });
+
+    data.projects[idx] = project;
+    saveDataFile(data);
+    return this.populateProject(project, data);
   },
 
   updateProjectNextAction(
@@ -1246,11 +2258,12 @@ export const db = {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const todayEnd = todayStart + 86400000;
+    const activeProjectsData = data.projects.filter((p) => p.deleted !== true);
 
     const totalLeads = data.leads.length;
     const newLeads = data.leads.filter((l) => l.currentStage === "NEW_LEAD").length;
-    const activeProjects = data.projects.filter((p) => p.currentStage !== "COMPLETED" && p.overallStatus !== "CANCELLED").length;
-    const completedProjects = data.projects.filter((p) => p.currentStage === "COMPLETED").length;
+    const activeProjects = activeProjectsData.filter((p) => p.currentStage !== "COMPLETED" && p.overallStatus !== "CANCELLED").length;
+    const completedProjects = activeProjectsData.filter((p) => p.currentStage === "COMPLETED").length;
 
     const followUpsToday = data.followUps.filter((f) => {
       const time = new Date(f.dueDate).getTime();
@@ -1262,10 +2275,10 @@ export const db = {
       return f.status === "PENDING" && time < todayStart;
     }).length;
 
-    const projectsAtRisk = data.projects.filter((p) => p.overallStatus === "AT_RISK").length;
-    const projectsDelayed = data.projects.filter((p) => p.overallStatus === "DELAYED").length;
+    const projectsAtRisk = activeProjectsData.filter((p) => p.overallStatus === "AT_RISK").length;
+    const projectsDelayed = activeProjectsData.filter((p) => p.overallStatus === "DELAYED").length;
 
-    const totalCapacityKwSold = data.projects.reduce((sum, p) => sum + (p.systemSizeKw || 0), 0);
+    const totalCapacityKwSold = activeProjectsData.reduce((sum, p) => sum + (p.systemSizeKw || 0), 0);
 
     // Leads by Stage
     const leadStageOrder: { stage: LeadStage; label: string }[] = [
@@ -1283,11 +2296,11 @@ export const db = {
       count: data.leads.filter((l) => l.currentStage === item.stage).length,
     }));
 
-    // Projects by Stage
+    // Projects by Stage (Active projects only)
     const projectsByStage = PROJECT_STAGES_CONFIG.map((stage) => ({
       stage: stage.id,
       label: stage.shortLabel,
-      count: data.projects.filter((p) => p.currentStage === stage.id).length,
+      count: activeProjectsData.filter((p) => p.currentStage === stage.id).length,
     }));
 
     // Needs Attention List
@@ -1313,8 +2326,8 @@ export const db = {
         });
       });
 
-    // 2. Overdue Next Actions / Tasks on Projects
-    data.projects
+    // 2. Overdue Next Actions / Tasks on Projects (Active projects only)
+    activeProjectsData
       .filter((p) => p.nextActionDueDate && new Date(p.nextActionDueDate).getTime() < todayStart && p.nextActionStatus !== "COMPLETED")
       .forEach((p) => {
         const cust = data.customers.find((c) => c.id === p.customerId);
@@ -1331,8 +2344,8 @@ export const db = {
         });
       });
 
-    // 3. Projects Delayed or At Risk
-    data.projects
+    // 3. Projects Delayed or At Risk (Active projects only)
+    activeProjectsData
       .filter((p) => p.overallStatus === "DELAYED")
       .forEach((p) => {
         const cust = data.customers.find((c) => c.id === p.customerId);
@@ -1349,9 +2362,9 @@ export const db = {
         });
       });
 
-    // 4. Projects stuck waiting for documents
-    data.projects
-      .filter((p) => p.currentStage === "DOCUMENTS" || p.currentStage === "BOOKING_CONFIRMED")
+    // 4. Projects stuck waiting for documents (Active projects only)
+    activeProjectsData
+      .filter((p) => p.currentStage === "DOCUMENTS" || p.currentStage === "BOOKING")
       .forEach((p) => {
         const pendingDocs = data.documents.filter(
           (d) => d.projectId === p.id && d.isRequired && d.status === "PENDING"
@@ -1370,6 +2383,24 @@ export const db = {
             linkUrl: `/projects/${p.id}?tab=documents`,
           });
         }
+      });
+
+    // 5. High-Risk Projects
+    activeProjectsData
+      .filter((p) => p.overallStatus === "AT_RISK")
+      .forEach((p) => {
+        const cust = data.customers.find((c) => c.id === p.customerId);
+        needsAttention.push({
+          id: `risk-${p.id}`,
+          type: "OVERDUE_TASK",
+          severity: "WARNING",
+          title: `At-Risk Project: #${p.projectNumber} (${cust?.name})`,
+          subtitle: `Stage: ${p.currentStage} | Needs attention`,
+          dueText: "Review project milestones",
+          entityType: "PROJECT",
+          entityId: p.id,
+          linkUrl: `/projects/${p.id}`,
+        });
       });
 
     return {
@@ -1408,6 +2439,7 @@ export const db = {
 
     const projects = data.projects
       .filter((p) => {
+        if (p.deleted === true) return false;
         const cust = data.customers.find((c) => c.id === p.customerId);
         const kseb = data.ksebDetails.find((k) => k.projectId === p.id);
         const loan = data.loanDetails.find((l) => l.projectId === p.id);

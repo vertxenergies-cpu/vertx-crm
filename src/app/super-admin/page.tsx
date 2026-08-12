@@ -18,6 +18,7 @@ import {
   UserMinus,
   RefreshCw,
   Zap,
+  Sliders,
 } from "lucide-react";
 import { SuperAdminStats, AuditLog } from "@/types";
 import { useAuth } from "@/context/AuthContext";
@@ -269,6 +270,27 @@ export default function SuperAdminDashboardPage() {
           </div>
           <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-emerald-700">
             <span>Security Center</span>
+            <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+          </div>
+        </Link>
+
+        <Link
+          href="/super-admin/reconcile"
+          className="p-5 rounded-2xl bg-white border border-slate-200 hover:border-amber-400 hover:shadow-md transition group flex flex-col justify-between"
+        >
+          <div>
+            <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-700 border border-amber-200 flex items-center justify-center mb-3">
+              <Sliders className="w-5 h-5" />
+            </div>
+            <h3 className="font-bold text-sm text-slate-900 group-hover:text-amber-700 transition">
+              Stage Data Reconciliation
+            </h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Review and resolve legacy project stage data to ensure strict sequential progression.
+            </p>
+          </div>
+          <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-amber-700">
+            <span>Reconcile Pipeline</span>
             <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
           </div>
         </Link>
