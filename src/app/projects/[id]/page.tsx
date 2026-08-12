@@ -213,7 +213,7 @@ function ProjectDetailContent() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { currentUser, allUsers } = useAuth();
+  const { currentUser, allUsers, getIdToken } = useAuth();
 
   const projectId = params.id as string;
   const isSuperAdmin = currentUser?.role === "SUPER_ADMIN" || currentUser?.email === "vertxenergies@gmail.com";
@@ -288,7 +288,11 @@ function ProjectDetailContent() {
 
   const fetchActiveProjectsForDuplicate = async () => {
     try {
-      const res = await fetch("/api/projects");
+      const token = await getIdToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch("/api/projects", { headers });
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
         setOtherProjectsList(json.data.filter((p: Project) => p.id !== projectId && p.projectNumber !== project?.projectNumber));
@@ -311,9 +315,13 @@ function ProjectDetailContent() {
 
     try {
       setDeleting(true);
+      const token = await getIdToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
       const res = await fetch(`/api/projects/${projectId}`, {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           reason: deletionReason,
           details: deletionDetails,
@@ -339,9 +347,13 @@ function ProjectDetailContent() {
     if (!confirm("Restore this project to the active project pipeline?")) return;
     try {
       setRestoring(true);
+      const token = await getIdToken();
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
       const res = await fetch(`/api/projects/${projectId}/restore`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ _userId: currentUser?.uid || currentUser?.id || "usr-super-admin" }),
       });
       const data = await res.json();
@@ -361,13 +373,20 @@ function ProjectDetailContent() {
 
   const fetchProjectDetails = async () => {
     try {
-      const res = await fetch(`/api/projects/${projectId}`);
+      const token = await getIdToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/projects/${projectId}`, { headers });
       const data = await res.json();
-      if (data.success) {
+      if (data.success && data.data) {
         setProject(data.data);
+      } else {
+        setProject(null);
       }
     } catch (err) {
       console.error(err);
+      setProject(null);
     } finally {
       setLoading(false);
     }
@@ -375,7 +394,11 @@ function ProjectDetailContent() {
 
   const fetchNotes = async () => {
     try {
-      const res = await fetch(`/api/notes?entityType=PROJECT&entityId=${projectId}`);
+      const token = await getIdToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/notes?entityType=PROJECT&entityId=${projectId}`, { headers });
       const data = await res.json();
       if (data.success) setNotes(data.data);
     } catch (err) {
@@ -385,7 +408,11 @@ function ProjectDetailContent() {
 
   const fetchAuditLogs = async () => {
     try {
-      const res = await fetch(`/api/audit?entityId=${projectId}`);
+      const token = await getIdToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/audit?entityId=${projectId}`, { headers });
       const data = await res.json();
       if (data.success) setAuditLogs(data.data);
     } catch (err) {
@@ -399,13 +426,33 @@ function ProjectDetailContent() {
     fetchAuditLogs();
   }, [projectId]);
 
-  if (loading || !project) {
+  if (loading) {
     return (
       <div className="space-y-6 animate-pulse p-6">
         <div className="h-6 bg-slate-200 rounded w-48" />
         <div className="h-28 bg-slate-200 rounded-xl" />
         <div className="h-32 bg-slate-200 rounded-xl" />
         <div className="h-96 bg-slate-200 rounded-xl" />
+      </div>
+    );
+  }
+
+  if (!project) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 bg-rose-100 rounded-full flex items-center justify-center text-rose-600 mb-4 shadow-sm">
+          <Lock className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 mb-2">ACCESS DENIED</h2>
+        <p className="text-sm text-slate-600 max-w-md mb-6">
+          You are not authorized to view this project or the project does not exist.
+        </p>
+        <Link
+          href="/projects"
+          className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-semibold hover:bg-slate-800 transition inline-flex items-center gap-2"
+        >
+          <ArrowLeft className="w-4 h-4" /> Back to Projects
+        </Link>
       </div>
     );
   }

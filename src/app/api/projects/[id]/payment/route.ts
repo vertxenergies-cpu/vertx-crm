@@ -1,21 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/storage";
-import { verifyAuthToken } from "@/lib/firebase/admin";
+import { getAuthenticatedUser, canViewFinancialData, canEditProject } from "@/lib/auth/authorization";
+
+export const dynamic = "force-dynamic";
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return NextResponse.json({ success: false, error: "Unauthorized: Valid authentication token required." }, { status: 401 });
+    }
+
+    const project = db.getProjectById(params.id);
+    if (!project) {
+      return NextResponse.json({ success: false, error: "Project not found." }, { status: 404 });
+    }
+
+    if (!canEditProject(user, project) || !canViewFinancialData(user, project)) {
+      return NextResponse.json({ success: false, error: "Access Denied: You are not authorized to modify payment milestones." }, { status: 403 });
+    }
+
     const body = await req.json();
-    const authHeader = req.headers.get("Authorization");
-    const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null;
-    const decodedToken = token ? await verifyAuthToken(token) : null;
-    const activeUser = (decodedToken ? db.getUserById(decodedToken.uid) : null) || db.getUserById(body._userId || "");
 
     let updated;
     if (body.paymentMode) {
-      updated = db.updateProjectPaymentMode(params.id, body.paymentMode, activeUser || undefined);
+      updated = db.updateProjectPaymentMode(params.id, body.paymentMode, user);
     } else if (body.milestoneId) {
       const { milestoneId, ...updates } = body;
-      updated = db.updateProjectPaymentMilestone(params.id, milestoneId, updates, activeUser || undefined);
+      updated = db.updateProjectPaymentMilestone(params.id, milestoneId, updates, user);
     }
 
     if (!updated) {

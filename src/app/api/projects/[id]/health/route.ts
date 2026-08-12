@@ -1,31 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/storage";
+import { getAuthenticatedUser, canEditProject } from "@/lib/auth/authorization";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return NextResponse.json({ success: false, error: "Unauthorized: Valid authentication token required." }, { status: 401 });
+    }
+
+    const project = db.getProjectById(params.id);
+    if (!project) {
+      return NextResponse.json({ success: false, error: "Project not found." }, { status: 404 });
+    }
+
+    if (!canEditProject(user, project)) {
+      return NextResponse.json({ success: false, error: "Access Denied: You are not authorized to update project health." }, { status: 403 });
+    }
+
     const body = await req.json();
     if (!body.health) {
       return NextResponse.json({ success: false, error: "Health status is required" }, { status: 400 });
     }
 
-    const activeUser = db.getUserById(body._userId || "usr-super-admin") || {
-      id: "usr-super-admin",
-      uid: "usr-super-admin",
-      employeeCode: "EMP-000",
-      name: "Vertx Energies Super Admin",
-      email: "vertxenergies@gmail.com",
-      phone: "+91 98470 00000",
-      role: "SUPER_ADMIN" as const,
-      roleId: "SUPER_ADMIN" as const,
-      department: "Executive & Global Security",
-      designation: "Chief Information Security Officer",
-      avatar: null,
-      active: true,
-      createdAt: "",
-      updatedAt: "",
-    };
-
-    const updated = db.updateProjectHealth(params.id, body.health, activeUser, body.reason);
+    const updated = db.updateProjectHealth(params.id, body.health, user, body.reason);
     if (!updated) {
       return NextResponse.json({ success: false, error: "Project not found" }, { status: 404 });
     }

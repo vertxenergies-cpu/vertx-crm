@@ -45,6 +45,7 @@ import {
   reconcileProjectStages,
   INITIAL_USERS,
 } from "./constants";
+import { canViewProject, canViewLead, canViewCustomer, isManagementOrSuperAdmin } from "./auth/authorization";
 
 interface DatabaseSchema {
   users: User[];
@@ -691,9 +692,11 @@ export const db = {
   },
 
   // Customers
-  getCustomers(search?: string): Customer[] {
+  getCustomers(search?: string, requestingUser?: User | null): Customer[] {
     const data = ensureDataFile();
-    let customers = [...data.customers];
+    let customers = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.customers.filter((c) => canViewCustomer(requestingUser, c))
+      : [...data.customers];
 
     if (search) {
       const q = search.toLowerCase();
@@ -709,18 +712,26 @@ export const db = {
 
     return customers.map((c) => ({
       ...c,
-      projects: data.projects.filter((p) => p.customerId === c.id),
+      projects: data.projects
+        .filter((p) => p.customerId === c.id)
+        .filter((p) => !requestingUser || canViewProject(requestingUser, p)),
     }));
   },
 
-  getCustomerById(id: string): Customer | undefined {
+  getCustomerById(id: string, requestingUser?: User | null): Customer | undefined {
     const data = ensureDataFile();
     const customer = data.customers.find((c) => c.id === id);
     if (!customer) return undefined;
 
+    if (requestingUser && !canViewCustomer(requestingUser, customer)) {
+      return undefined;
+    }
+
     return {
       ...customer,
-      projects: data.projects.filter((p) => p.customerId === customer.id),
+      projects: data.projects
+        .filter((p) => p.customerId === customer.id)
+        .filter((p) => !requestingUser || canViewProject(requestingUser, p)),
     };
   },
 
@@ -758,27 +769,33 @@ export const db = {
   },
 
   // Projects
-  getProjects(filters?: {
-    stage?: string;
-    status?: string;
-    salespersonId?: string;
-    projectManagerId?: string;
-    district?: string;
-    search?: string;
-  }): Project[] {
-    return this.getProjectsWithCounts(filters).projects;
+  getProjects(
+    filters?: {
+      stage?: string;
+      status?: string;
+      salespersonId?: string;
+      projectManagerId?: string;
+      district?: string;
+      search?: string;
+    },
+    requestingUser?: User | null
+  ): Project[] {
+    return this.getProjectsWithCounts(filters, requestingUser).projects;
   },
 
-  getProjectsWithCounts(filters?: {
-    stage?: string;
-    status?: string;
-    salespersonId?: string;
-    projectManagerId?: string;
-    district?: string;
-    search?: string;
-    onlyDeleted?: boolean;
-    includeDeleted?: boolean;
-  }): {
+  getProjectsWithCounts(
+    filters?: {
+      stage?: string;
+      status?: string;
+      salespersonId?: string;
+      projectManagerId?: string;
+      district?: string;
+      search?: string;
+      onlyDeleted?: boolean;
+      includeDeleted?: boolean;
+    },
+    requestingUser?: User | null
+  ): {
     projects: Project[];
     total: number;
     stageCounts: Record<string, number>;
@@ -786,6 +803,11 @@ export const db = {
     deletedCount: number;
   } {
     const data = ensureDataFile();
+
+    // 1. First scope raw projects by user authorization
+    const baseProjects = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.projects.filter((p) => canViewProject(requestingUser, p))
+      : data.projects;
 
     const matchFilters = (
       p: Project,
@@ -834,17 +856,17 @@ export const db = {
       return true;
     };
 
-    const filtered = data.projects.filter((p) => matchFilters(p, filters));
+    const filtered = baseProjects.filter((p) => matchFilters(p, filters));
 
     // Dynamic stage counts matching other active filters (status, district, search, etc.)
     const allStageIds: ProjectStage[] = PROJECT_STAGES_CONFIG.map((s) => s.id);
 
     const stageCounts: Record<string, number> = {
-      ALL: data.projects.filter((p) => matchFilters(p, { ...filters, stage: undefined, onlyDeleted: false })).length,
+      ALL: baseProjects.filter((p) => matchFilters(p, { ...filters, stage: undefined, onlyDeleted: false })).length,
     };
 
     allStageIds.forEach((stageId) => {
-      stageCounts[stageId] = data.projects.filter(
+      stageCounts[stageId] = baseProjects.filter(
         (p) => p.currentStage === stageId && matchFilters(p, { ...filters, stage: undefined, onlyDeleted: false })
       ).length;
     });
@@ -852,16 +874,16 @@ export const db = {
     // Dynamic health counts matching other active filters (stage, district, search, etc.)
     const allHealthIds: ProjectHealth[] = ["ON_TRACK", "AT_RISK", "DELAYED", "ON_HOLD", "COMPLETED", "CANCELLED"];
     const healthCounts: Record<string, number> = {
-      ALL: data.projects.filter((p) => matchFilters(p, { ...filters, status: undefined, onlyDeleted: false })).length,
+      ALL: baseProjects.filter((p) => matchFilters(p, { ...filters, status: undefined, onlyDeleted: false })).length,
     };
 
     allHealthIds.forEach((healthId) => {
-      healthCounts[healthId] = data.projects.filter(
+      healthCounts[healthId] = baseProjects.filter(
         (p) => p.overallStatus === healthId && matchFilters(p, { ...filters, status: undefined, onlyDeleted: false })
       ).length;
     });
 
-    const deletedCount = data.projects.filter((p) => p.deleted === true).length;
+    const deletedCount = baseProjects.filter((p) => p.deleted === true).length;
 
     return {
       projects: filtered.map((p) => this.populateProject(p, data)),
@@ -2285,25 +2307,40 @@ export const db = {
   },
 
   // Dashboard Stats & Needs Attention
-  getDashboardStats(): DashboardStats {
+  getDashboardStats(requestingUser?: User | null): DashboardStats {
     const data = ensureDataFile();
 
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const todayEnd = todayStart + 86400000;
-    const activeProjectsData = data.projects.filter((p) => p.deleted !== true);
 
-    const totalLeads = data.leads.length;
-    const newLeads = data.leads.filter((l) => l.currentStage === "NEW_LEAD").length;
+    // Scope projects and leads by user authorization
+    const scopedProjects = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.projects.filter((p) => canViewProject(requestingUser, p))
+      : data.projects;
+
+    const scopedLeads = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.leads.filter((l) => canViewLead(requestingUser, l))
+      : data.leads;
+
+    const uId = requestingUser?.uid || requestingUser?.id;
+    const scopedFollowUps = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.followUps.filter((f) => f.assignedUserId === uId)
+      : data.followUps;
+
+    const activeProjectsData = scopedProjects.filter((p) => p.deleted !== true);
+
+    const totalLeads = scopedLeads.length;
+    const newLeads = scopedLeads.filter((l) => l.currentStage === "NEW_LEAD").length;
     const activeProjects = activeProjectsData.filter((p) => p.currentStage !== "COMPLETED" && p.overallStatus !== "CANCELLED").length;
     const completedProjects = activeProjectsData.filter((p) => p.currentStage === "COMPLETED").length;
 
-    const followUpsToday = data.followUps.filter((f) => {
+    const followUpsToday = scopedFollowUps.filter((f) => {
       const time = new Date(f.dueDate).getTime();
       return f.status === "PENDING" && time >= todayStart && time < todayEnd;
     }).length;
 
-    const overdueFollowUps = data.followUps.filter((f) => {
+    const overdueFollowUps = scopedFollowUps.filter((f) => {
       const time = new Date(f.dueDate).getTime();
       return f.status === "PENDING" && time < todayStart;
     }).length;
@@ -2326,7 +2363,7 @@ export const db = {
     ];
     const leadsByStage = leadStageOrder.map((item) => ({
       ...item,
-      count: data.leads.filter((l) => l.currentStage === item.stage).length,
+      count: scopedLeads.filter((l) => l.currentStage === item.stage).length,
     }));
 
     // Projects by Stage (Active projects only)
@@ -2340,10 +2377,10 @@ export const db = {
     const needsAttention: DashboardStats["needsAttention"] = [];
 
     // 1. Overdue Follow-ups
-    data.followUps
+    scopedFollowUps
       .filter((f) => f.status === "PENDING" && new Date(f.dueDate).getTime() < todayStart)
       .forEach((f) => {
-        const lead = f.leadId ? data.leads.find((l) => l.id === f.leadId) : null;
+        const lead = f.leadId ? scopedLeads.find((l) => l.id === f.leadId) : null;
         const cust = f.customerId ? data.customers.find((c) => c.id === f.customerId) : null;
         const name = lead?.customerName || cust?.name || "Client";
         needsAttention.push({
@@ -2453,13 +2490,25 @@ export const db = {
   },
 
   // Global Search
-  searchGlobal(query: string) {
+  searchGlobal(query: string, requestingUser?: User | null) {
     const q = query.trim().toLowerCase();
     if (!q) return { customers: [], projects: [], leads: [], tasks: [] };
 
     const data = ensureDataFile();
 
-    const customers = data.customers
+    const scopedProjects = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.projects.filter((p) => canViewProject(requestingUser, p))
+      : data.projects;
+
+    const scopedLeads = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.leads.filter((l) => canViewLead(requestingUser, l))
+      : data.leads;
+
+    const scopedCustomers = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.customers.filter((c) => canViewCustomer(requestingUser, c))
+      : data.customers;
+
+    const customers = scopedCustomers
       .filter(
         (c) =>
           c.name.toLowerCase().includes(q) ||
@@ -2470,7 +2519,7 @@ export const db = {
       )
       .slice(0, 5);
 
-    const projects = data.projects
+    const projects = scopedProjects
       .filter((p) => {
         if (p.deleted === true) return false;
         const cust = data.customers.find((c) => c.id === p.customerId);
@@ -2486,7 +2535,7 @@ export const db = {
       .slice(0, 5)
       .map((p) => this.populateProject(p, data));
 
-    const leads = data.leads
+    const leads = scopedLeads
       .filter(
         (l) =>
           l.customerName.toLowerCase().includes(q) ||
@@ -2496,7 +2545,12 @@ export const db = {
       )
       .slice(0, 5);
 
-    const tasks = data.tasks
+    const uId = requestingUser?.uid || requestingUser?.id;
+    const scopedTasks = requestingUser && !isManagementOrSuperAdmin(requestingUser)
+      ? data.tasks.filter((t) => t.assignedUserId === uId)
+      : data.tasks;
+
+    const tasks = scopedTasks
       .filter((t) => t.title.toLowerCase().includes(q) || t.description?.toLowerCase().includes(q))
       .slice(0, 5);
 

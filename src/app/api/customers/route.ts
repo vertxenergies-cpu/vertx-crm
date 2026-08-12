@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/storage";
+import { getAuthenticatedUser } from "@/lib/auth/authorization";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return NextResponse.json({ success: false, error: "Unauthorized: Valid authentication token required." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const search = searchParams.get("search") || undefined;
-    const customers = db.getCustomers(search);
+    const customers = db.getCustomers(search, user);
     return NextResponse.json({ success: true, data: customers });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message }, { status: 500 });

@@ -1,33 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/storage";
-import { verifyAuthToken } from "@/lib/firebase/admin";
+import { getAuthenticatedUser, canOverrideProjectStage } from "@/lib/auth/authorization";
 import { validateCompletedStages } from "@/lib/constants";
 import { ProjectStage } from "@/types";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const body = await req.json();
-    const { confirmedStages, reason, _userId } = body;
-
-    const authHeader = req.headers.get("Authorization");
-    const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null;
-    const decodedToken = token ? await verifyAuthToken(token) : null;
-    const activeUser =
-      (decodedToken ? db.getUserById(decodedToken.uid) : null) ||
-      db.getUserById(_userId || "") ||
-      db.getUserById("usr-super-admin");
-
-    if (!activeUser) {
-      return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return NextResponse.json({ success: false, error: "Unauthorized: Valid authentication token required." }, { status: 401 });
     }
 
-    // Strict Super Admin authorization check (backend security enforcement)
-    if (activeUser.role !== "SUPER_ADMIN" && activeUser.email !== "vertxenergies@gmail.com") {
+    if (!canOverrideProjectStage(user)) {
       return NextResponse.json({
         success: false,
         error: "Forbidden: Only Super Admin is authorized to execute stage history reconciliation.",
       }, { status: 403 });
     }
+
+    const body = await req.json();
+    const { confirmedStages, reason } = body;
 
     if (!Array.isArray(confirmedStages)) {
       return NextResponse.json({
@@ -54,7 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const result = db.reconcileProjectStageHistory(
       params.id,
       confirmedStages as ProjectStage[],
-      activeUser,
+      user,
       reason
     );
 

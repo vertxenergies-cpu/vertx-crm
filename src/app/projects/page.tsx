@@ -53,7 +53,7 @@ function ProjectsContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { currentUser } = useAuth();
+  const { currentUser, getIdToken } = useAuth();
   const canDelete = canUserDeleteProject(currentUser);
 
   // Read current filters directly from URL Search Parameters (Single Source of Truth)
@@ -102,7 +102,11 @@ function ProjectsContent() {
     setLoading(true);
     try {
       const queryString = searchParams.toString();
-      const res = await fetch(`/api/projects${queryString ? `?${queryString}` : ""}`);
+      const token = await getIdToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/projects${queryString ? `?${queryString}` : ""}`, { headers });
       const json = await res.json();
       if (json.success) {
         setProjects(json.data || []);
@@ -116,7 +120,7 @@ function ProjectsContent() {
     } finally {
       setLoading(false);
     }
-  }, [searchParams]);
+  }, [searchParams, getIdToken]);
 
   useEffect(() => {
     fetchProjects();

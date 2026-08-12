@@ -1,11 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/lib/storage";
-import { verifyAuthToken } from "@/lib/firebase/admin";
+import { getAuthenticatedUser, canOverrideProjectStage } from "@/lib/auth/authorization";
+
+export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      return NextResponse.json({ success: false, error: "Unauthorized: Valid authentication token required." }, { status: 401 });
+    }
+
+    if (!canOverrideProjectStage(user)) {
+      return NextResponse.json({
+        success: false,
+        error: "Access Denied: Only Super Admin is authorized to execute manual stage overrides.",
+      }, { status: 403 });
+    }
+
     const body = await req.json();
-    const { targetStage, reason, confirmation, _userId } = body;
+    const { targetStage, reason, confirmation } = body;
 
     if (!targetStage) {
       return NextResponse.json({ success: false, error: "Target stage is required" }, { status: 400 });
@@ -25,27 +39,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }, { status: 400 });
     }
 
-    const authHeader = req.headers.get("Authorization");
-    const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null;
-    const decodedToken = token ? await verifyAuthToken(token) : null;
-    const activeUser =
-      (decodedToken ? db.getUserById(decodedToken.uid) : null) ||
-      db.getUserById(_userId || "") ||
-      db.getUserById("usr-super-admin");
-
-    if (!activeUser) {
-      return NextResponse.json({ success: false, error: "Authentication required" }, { status: 401 });
-    }
-
-    // Strict Super Admin verification
-    if (activeUser.role !== "SUPER_ADMIN" && activeUser.email !== "vertxenergies@gmail.com") {
-      return NextResponse.json({
-        success: false,
-        error: "Access Denied: Only Super Admin is authorized to execute manual stage overrides.",
-      }, { status: 403 });
-    }
-
-    const result = db.overrideProjectStage(params.id, targetStage, activeUser, reason);
+    const result = db.overrideProjectStage(params.id, targetStage, user, reason);
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.error }, { status: 400 });
     }
