@@ -43,11 +43,12 @@ export const adminDb: Firestore = getFirestore(app);
  * Returns the decoded token payload containing user identity and custom claims.
  */
 export async function verifyAuthToken(authHeader: string | null | undefined): Promise<DecodedIdToken | null> {
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return null;
-  }
+  if (!authHeader) return null;
 
-  const idToken = authHeader.split("Bearer ")[1]?.trim();
+  const idToken = authHeader.startsWith("Bearer ")
+    ? authHeader.split("Bearer ")[1]?.trim()
+    : authHeader.trim();
+
   if (!idToken) return null;
 
   try {

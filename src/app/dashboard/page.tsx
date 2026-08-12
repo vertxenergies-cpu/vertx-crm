@@ -32,6 +32,8 @@ import {
   Pie,
 } from "recharts";
 
+import { useAuth } from "@/context/AuthContext";
+
 const STAGE_COLORS = [
   "#2563EB",
   "#3B82F6",
@@ -47,30 +49,82 @@ const STAGE_COLORS = [
 
 export default function DashboardPage() {
   const router = useRouter();
+  const { getIdToken, status } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchDashboardStats = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const token = await getIdToken();
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers["Authorization"] = `Bearer ${token.replace("Bearer ", "")}`;
+      }
+
+      const res = await fetch("/api/dashboard", { headers });
+      const data = await res.json();
+
+      if (res.status === 401) {
+        setError("Authentication required. Please sign in.");
+        return;
+      }
+
+      if (res.status === 403) {
+        setError("Access Denied: You are not authorized to view dashboard statistics.");
+        return;
+      }
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Dashboard statistics temporarily unavailable.");
+      }
+
+      setStats(data.data);
+    } catch (err: any) {
+      console.error("Dashboard fetch error:", err);
+      setError(err?.message || "Failed to load dashboard statistics.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    fetch("/api/dashboard")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success) {
-          setStats(data.data);
-        }
-      })
-      .catch((err) => console.error(err))
-      .finally(() => setLoading(false));
-  }, []);
+    if (status === "AUTHENTICATED" || status === "UNAUTHENTICATED") {
+      fetchDashboardStats();
+    }
+  }, [status]);
 
-  if (loading || !stats) {
+  if (loading) {
     return (
-      <div className="space-y-6 animate-pulse">
+      <div className="space-y-6 animate-pulse p-6">
         <div className="h-8 bg-slate-200 rounded w-64" />
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
             <div key={i} className="h-28 bg-slate-200 rounded-xl" />
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (error || !stats) {
+    return (
+      <div className="min-h-[50vh] flex flex-col items-center justify-center p-6 text-center space-y-4">
+        <div className="w-14 h-14 bg-rose-100 rounded-full flex items-center justify-center text-rose-600 shadow-sm">
+          <AlertTriangle className="w-7 h-7" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900">Dashboard Unavailable</h2>
+        <p className="text-sm text-slate-600 max-w-md">
+          {error || "Unable to load dashboard data."}
+        </p>
+        <button
+          onClick={fetchDashboardStats}
+          className="px-4 py-2 bg-solar-navy text-white rounded-lg text-xs font-semibold hover:bg-slate-800 transition"
+        >
+          Retry
+        </button>
       </div>
     );
   }

@@ -20,8 +20,10 @@ import { KERALA_DISTRICTS } from "@/lib/constants";
 import { HealthBadge, ProjectStageBadge } from "@/components/ui/badges";
 import { Modal } from "@/components/ui/Modal";
 import { Drawer } from "@/components/ui/Drawer";
+import { useAuth } from "@/context/AuthContext";
 
 export default function CustomersPage() {
+  const { getIdToken } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -34,9 +36,10 @@ export default function CustomersPage() {
     whatsapp: "",
     email: "",
     address: "",
-    district: "Kozhikode",
+    district: "Ernakulam",
     ksebConsumerNumber: "",
     ksebSection: "",
+    ksebSubDivision: "",
     propertyType: "Residential Villa (RCC Flat Roof)",
     notes: "",
   });
@@ -44,7 +47,11 @@ export default function CustomersPage() {
   const fetchCustomers = async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/customers${search ? `?search=${encodeURIComponent(search)}` : ""}`);
+      const token = await getIdToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const res = await fetch(`/api/customers${search ? `?search=${encodeURIComponent(search)}` : ""}`, { headers });
       const data = await res.json();
       if (data.success) {
         setCustomers(data.data);
@@ -80,6 +87,7 @@ export default function CustomersPage() {
           district: "Kozhikode",
           ksebConsumerNumber: "",
           ksebSection: "",
+          ksebSubDivision: "",
           propertyType: "Residential Villa (RCC Flat Roof)",
           notes: "",
         });
