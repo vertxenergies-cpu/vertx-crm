@@ -798,6 +798,8 @@ export const INITIAL_USERS = [
     active: true,
     status: "ACTIVE" as const,
     mustChangePassword: false,
+    createdAt: "2026-01-15T09:00:00.000Z",
+    updatedAt: "2026-08-01T10:00:00.000Z",
     lastLoginAt: "2026-08-11T09:30:00.000Z",
     lastActiveAt: "2026-08-11T11:00:00.000Z",
   },

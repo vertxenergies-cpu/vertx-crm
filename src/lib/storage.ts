@@ -43,6 +43,7 @@ import {
   canCompleteStage,
   validateCompletedStages,
   reconcileProjectStages,
+  INITIAL_USERS,
 } from "./constants";
 
 interface DatabaseSchema {
@@ -73,12 +74,20 @@ function ensureDataFile(): DatabaseSchema {
 
   try {
     if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+      try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      } catch {
+        // Handle read-only serverless environment
+      }
     }
 
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, "utf-8");
       memoryDb = JSON.parse(raw) as DatabaseSchema;
+      if (!memoryDb.users) memoryDb.users = [];
+      if (!memoryDb.users.some((u) => u.email?.toLowerCase() === "vertxenergies@gmail.com")) {
+        memoryDb.users.unshift(INITIAL_USERS[0]);
+      }
       return memoryDb;
     }
   } catch (err) {
